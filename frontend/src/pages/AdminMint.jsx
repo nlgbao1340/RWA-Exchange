@@ -29,8 +29,14 @@ function AdminMint({ signer, account }) {
     e.preventDefault();
     setLoading(true);
     try {
+      // Clean and validate address
+      const cleanAddress = nftRecipient.trim();
+      if (!ethers.isAddress(cleanAddress)) {
+        throw new Error("Invalid recipient address format");
+      }
+
       const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
-      const tx = await nftContract.safeMint(nftRecipient, tokenId, tokenURI);
+      const tx = await nftContract.safeMint(cleanAddress, tokenId, tokenURI);
       await tx.wait();
       alert(`✅ NFT #${tokenId} minted successfully!`);
       setNftRecipient(''); setTokenId(''); setTokenURI('');
