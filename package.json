@@ -1,0 +1,25 @@
+{
+  "name": "rwa-lending-platform",
+  "version": "1.0.0",
+  "description": "RWA Lending Platform - Full-stack DeFi Application",
+  "scripts": {
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "compile": "cd backend && npx hardhat compile",
+    "test": "cd backend && npx hardhat test",
+    "node": "cd backend && npx hardhat node",
+    "deploy": "cd backend && npx hardhat run scripts/deploy.js --network localhost",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev": "concurrently \"npm run node\" \"npm run dev:frontend\""
+  },
+  "keywords": [
+    "blockchain",
+    "defi",
+    "rwa",
+    "lending",
+    "ethereum",
+    "solidity",
+    "react"
+  ],
+  "author": "",
+  "license": "MIT"
+}
