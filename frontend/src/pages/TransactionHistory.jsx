@@ -338,11 +338,18 @@ function TransactionHistory({ account, provider }) {
   const filteredTxs = filter === 'all' 
     ? displayedTxs 
     : displayedTxs.filter(tx => {
-        if (filter === 'deposit') return tx.type === 'Deposit' || tx.type === 'CollateralDeposited';
-        if (filter === 'borrow') return tx.type === 'Borrowed';
-        if (filter === 'repay') return tx.type === 'Repaid';
-        if (filter === 'liquidation') return tx.type.includes('Auction');
-        return true;
+        switch (filter) {
+          case 'deposit': 
+            return tx.type === 'Deposit' || tx.type === 'CollateralDeposited';
+          case 'borrow': 
+            return tx.type === 'Borrowed';
+          case 'repay': 
+            return tx.type === 'Repaid';
+          case 'liquidation': 
+            return tx.type.includes('Auction') || tx.type === 'BidPlaced';
+          default: 
+            return true;
+        }
       });
 
   const paginatedTxs = filteredTxs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);

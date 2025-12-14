@@ -9,7 +9,7 @@
     "deploy": "hardhat run scripts/deploy.js --network localhost",
     "seed": "hardhat run scripts/seed-data.js --network localhost",
     "setup": "hardhat run scripts/setup-full.js --network localhost",
-    "node": "hardhat node"
+    "node": "hardhat node --hostname 0.0.0.0"
   },
   "keywords": ["blockchain", "rwa", "lending", "defi"],
   "author": "",

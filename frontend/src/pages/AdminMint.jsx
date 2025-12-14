@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { CONTRACTS } from '../config/contracts';
 import RWA_NFT_ABI from '../abis/RWA_NFT.json';
@@ -12,6 +12,67 @@ function AdminMint({ signer, account }) {
   const [priceTokenId, setPriceTokenId] = useState('');
   const [assetPrice, setAssetPrice] = useState('');
   const [priceLoading, setPriceLoading] = useState(false);
+  const [isOwner, setIsOwner] = useState(false);
+  const [checkingOwner, setCheckingOwner] = useState(true);
+  const [systemNFTs, setSystemNFTs] = useState([]);
+
+  const loadSystemNFTs = async () => {
+    if (!signer) return;
+    try {
+      const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
+      const oracleContract = new ethers.Contract(CONTRACTS.RWA_Oracle, RWA_Oracle_ABI.abi || RWA_Oracle_ABI, signer);
+      
+      const total = await nftContract.totalSupply();
+      const items = [];
+      
+      // Loop through all tokens (in reverse to show newest first)
+      for (let i = Number(total) - 1; i >= 0; i--) {
+        const tokenId = await nftContract.tokenByIndex(i);
+        const owner = await nftContract.ownerOf(tokenId);
+        const uri = await nftContract.tokenURI(tokenId);
+        
+        let price = '0';
+        const isPriced = await oracleContract.isPriceSet(tokenId);
+        if (isPriced) {
+          const priceWei = await oracleContract.getAssetPrice(tokenId);
+          price = ethers.formatUnits(priceWei, 6);
+        }
+
+        items.push({
+          id: tokenId.toString(),
+          owner,
+          uri,
+          price,
+          isPriced
+        });
+      }
+      setSystemNFTs(items);
+    } catch (error) {
+      console.error("Failed to load system NFTs:", error);
+    }
+  };
+
+  useEffect(() => {
+    const checkOwner = async () => {
+      if (!signer || !account) return;
+      try {
+        const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
+        const owner = await nftContract.owner();
+        setIsOwner(owner.toLowerCase() === account.toLowerCase());
+      } catch (error) {
+        console.error("Failed to check owner:", error);
+      } finally {
+        setCheckingOwner(false);
+      }
+    };
+    checkOwner();
+  }, [signer, account]);
+
+  useEffect(() => {
+    if (isOwner && signer) {
+      loadSystemNFTs();
+    }
+  }, [isOwner, signer, loading, priceLoading]); // Reload when actions complete
 
   if (!account) {
     return (
@@ -20,6 +81,29 @@ function AdminMint({ signer, account }) {
           <div className="text-6xl mb-4">🔐</div>
           <h2 className="text-2xl font-bold mb-2">Wallet Not Connected</h2>
           <p className="text-gray-400">Please connect your wallet to access Admin functions</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (checkingOwner) {
+    return (
+      <div className="flex justify-center items-center min-h-[60vh]">
+        <div className="animate-spin text-6xl">⚙️</div>
+      </div>
+    );
+  }
+
+  if (!isOwner) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <div className="premium-card text-center p-12 border-red-500/30">
+          <div className="text-6xl mb-4">🚫</div>
+          <h2 className="text-2xl font-bold mb-2 text-red-400">Access Denied</h2>
+          <p className="text-gray-400">You are not the administrator of this platform.</p>
+          <div className="mt-6 p-4 bg-red-500/10 rounded-xl border border-red-500/20">
+            <p className="text-sm text-red-300">Only the contract owner can access this page.</p>
+          </div>
         </div>
       </div>
     );
@@ -40,6 +124,7 @@ function AdminMint({ signer, account }) {
       await tx.wait();
       alert(`✅ NFT #${tokenId} minted successfully!`);
       setNftRecipient(''); setTokenId(''); setTokenURI('');
+      loadSystemNFTs(); // Refresh list
     } catch (error) {
       console.error('Mint failed:', error);
       alert('❌ Mint failed: ' + error.message);
@@ -58,6 +143,7 @@ function AdminMint({ signer, account }) {
       await tx.wait();
       alert(`✅ Price for NFT #${priceTokenId} set to $${assetPrice} USDC`);
       setPriceTokenId(''); setAssetPrice('');
+      loadSystemNFTs(); // Refresh list
     } catch (error) {
       console.error('Set price failed:', error);
       alert('❌ Set price failed: ' + error.message);
@@ -101,6 +187,63 @@ function AdminMint({ signer, account }) {
             <div className="glass-card p-4 border border-blue-500/30"><div className="flex items-start space-x-3"><span className="text-2xl">💡</span><div className="text-sm text-blue-300"><p className="font-semibold mb-1">Lending Parameters:</p><ul className="space-y-1 text-xs text-gray-400"><li>• Max LTV: <span className="text-blue-300 font-semibold">60%</span></li><li>• Interest Rate: <span className="text-blue-300 font-semibold">5% APY</span></li></ul></div></div></div>
             <button type="submit" disabled={priceLoading} className="btn-success w-full text-lg">{priceLoading ? <span className="flex items-center justify-center space-x-2"><span className="animate-spin">⚙️</span><span>Updating...</span></span> : <span className="flex items-center justify-center space-x-2"><span>💰</span><span>Set Price</span></span>}</button>
           </form>
+        </div>
+      </div>
+
+      {/* System Assets List */}
+      <div className="premium-card mb-8">
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-2xl font-bold flex items-center space-x-3">
+            <span>🗃️</span><span>System Assets Registry</span>
+          </h3>
+          <button onClick={loadSystemNFTs} className="btn-outline text-sm px-3 py-1">🔄 Refresh</button>
+        </div>
+        
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="text-gray-400 border-b border-white/10">
+                <th className="p-4">Token ID</th>
+                <th className="p-4">Owner</th>
+                <th className="p-4">Metadata URI</th>
+                <th className="p-4">Valuation (USDC)</th>
+                <th className="p-4">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {systemNFTs.length === 0 ? (
+                <tr>
+                  <td colSpan="5" className="p-8 text-center text-gray-500">No assets minted yet.</td>
+                </tr>
+              ) : (
+                systemNFTs.map((nft) => (
+                  <tr key={nft.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                    <td className="p-4 font-mono text-purple-300">#{nft.id}</td>
+                    <td className="p-4 font-mono text-xs text-gray-400">
+                      {nft.owner.slice(0, 6)}...{nft.owner.slice(-4)}
+                      {nft.owner.toLowerCase() === account.toLowerCase() && <span className="ml-2 text-xs bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded">You</span>}
+                    </td>
+                    <td className="p-4 text-sm text-gray-400 truncate max-w-[150px]">{nft.uri}</td>
+                    <td className="p-4">
+                      {nft.isPriced ? (
+                        <span className="text-green-400 font-bold">${nft.price}</span>
+                      ) : (
+                        <span className="text-yellow-500 text-sm italic">Pending Valuation</span>
+                      )}
+                    </td>
+                    <td className="p-4">
+                      <button 
+                        onClick={() => { setPriceTokenId(nft.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                        className="text-sm bg-blue-500/20 text-blue-300 px-3 py-1 rounded hover:bg-blue-500/40 transition-colors"
+                      >
+                        Set Price
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
