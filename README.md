@@ -8,67 +8,14 @@
 
 ---
 
-## 🔄 BƯỚC 1: RESET VÀ XÓA CACHE (Nếu đã chạy trước đó)
+## Chạy bằng 
 
-### 1.1. Kill tất cả Node.js processes
-```bash
-taskkill //F //IM node.exe
+## 🔄 BƯỚC 1: Chạy bằng Docker
+
 ```
-
-### 1.2. Xóa cache và blockchain data cũ
-```bash
-cd backend
-rm -rf cache artifacts deployments/localhost.json node_modules/.cache
+docker-compose up --build
 ```
-
-### 1.3. Reset MetaMask (QUAN TRỌNG!)
-1. Mở MetaMask
-2. **Settings** → **Advanced**
-3. Kéo xuống, click **"Clear activity tab data"**
-4. Đóng và mở lại MetaMask
-
----
-
-## 🎯 BƯỚC 2: CHẠY DỰ ÁN
-
-### Terminal 1: Khởi động Hardhat Node
-```bash
-cd backend
-npm run node
-```
-
-**Đợi thấy message:**
-```
-Started HTTP and WebSocket JSON-RPC server at http://127.0.0.1:8545/
-```
-
-### Terminal 2: Deploy Contracts và Seed Data
-**Đợi 5-10 giây sau khi Terminal 1 khởi động xong**
-
-```bash
-cd backend
-
-# Deploy contracts
-npm run deploy
-
-# Seed sample data
-npm run seed
-```
-
-**Kết quả mong đợi:**
-- ✅ Deploy thành công 6 contracts
-- ✅ Seed ~25+ transactions
-- ✅ Exit code: 0
-
-### Terminal 3: Khởi động Frontend
-```bash
-cd frontend
-npm run dev
-```
-
-**Frontend sẽ chạy tại:** `http://localhost:3000` hoặc `http://localhost:3001`
-
----
+Front-end sẽ chạy ở http://localhost:3000
 
 ## 🔧 BƯỚC 3: CẤU HÌNH METAMASK
 

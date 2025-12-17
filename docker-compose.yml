@@ -1,0 +1,52 @@
+version: "3.8"
+
+services:
+  blockchain:
+    build: ./backend
+    ports:
+      - "8545:8545"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - rwa-network
+
+  deployer:
+    build: ./backend
+    depends_on:
+      blockchain:
+        condition: service_started
+    environment:
+      - RPC_URL=http://blockchain:8545
+      - FRONTEND_CONFIG_PATH=/app/frontend/src/config/contracts.js
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - ./frontend:/app/frontend
+    command: >
+      sh -c "
+        echo 'Waiting for blockchain node...' &&
+        while ! nc -z blockchain 8545; do sleep 1; done &&
+        echo 'Blockchain node is up!' &&
+        npx hardhat run scripts/deploy.js --network localhost
+      "
+    networks:
+      - rwa-network
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      deployer:
+        condition: service_completed_successfully
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - rwa-network
+
+networks:
+  rwa-network:
+    driver: bridge
+
