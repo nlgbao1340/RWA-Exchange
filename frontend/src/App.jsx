@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { ethers } from 'ethers';
 import { CONTRACTS, NETWORK } from './config/contracts';
+import RWA_NFT_ABI from './abis/RWA_NFT.json';
 import AdminMint from './pages/AdminMint';
 import LenderPool from './pages/LenderPool';
 import BorrowerDashboard from './pages/BorrowerDashboard';
@@ -9,10 +10,35 @@ import Auctions from './pages/Auctions';
 import TransactionHistory from './pages/TransactionHistory';
 import './index.css';
 
-function Navigation({ account, connectWallet }) {
+function Navigation({ account, connectWallet, signer, disconnectWallet }) {
   const location = useLocation();
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [balance, setBalance] = useState('0');
+
+  useEffect(() => {
+    const checkAdmin = async () => {
+      if (signer && account) {
+        try {
+          const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
+          const owner = await nftContract.owner();
+          setIsAdmin(owner.toLowerCase() === account.toLowerCase());
+          
+          const bal = await signer.provider.getBalance(account);
+          setBalance(ethers.formatEther(bal));
+        } catch (error) {
+          console.error("Error checking admin/balance:", error);
+        }
+      } else {
+        setIsAdmin(false);
+        setBalance('0');
+      }
+    };
+    checkAdmin();
+  }, [signer, account]);
+
   const navItems = [
-    { path: '/admin', label: 'Admin', icon: '⚙️' },
+    { path: '/admin', label: 'Admin', icon: '⚙️', adminOnly: true },
     { path: '/lender', label: 'Supply', icon: '💎' },
     { path: '/borrower', label: 'Borrow', icon: '💰' },
     { path: '/auctions', label: 'Liquidations', icon: '⚡' },
@@ -34,7 +60,7 @@ function Navigation({ account, connectWallet }) {
           </Link>
           
           <div className="hidden md:flex items-center space-x-2">
-            {navItems.map((item) => (
+            {navItems.filter(item => !item.adminOnly || isAdmin).map((item) => (
               <Link key={item.path} to={item.path} className={`px-4 py-2 rounded-xl transition-all duration-300 flex items-center space-x-2 ${ location.pathname === item.path ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'text-gray-400 hover:text-white hover:bg-white/5' }`}>
                 <span>{item.icon}</span>
                 <span className="font-medium">{item.label}</span>
@@ -42,11 +68,58 @@ function Navigation({ account, connectWallet }) {
             ))}
           </div>
 
-          <div>
+          <div className="relative">
             {account ? (
-              <div className="flex items-center space-x-3 glass-card px-4 py-2">
-                <div className="pulse-dot bg-green-400"></div>
-                <span className="text-sm font-mono text-gray-300">{account.slice(0, 6)}...{account.slice(-4)}</span>
+              <div>
+                <button 
+                  onClick={() => setShowUserMenu(!showUserMenu)}
+                  className="flex items-center space-x-3 glass-card px-4 py-2 hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <div className="pulse-dot bg-green-400"></div>
+                  <span className="text-sm font-mono text-gray-300">{account.slice(0, 6)}...{account.slice(-4)}</span>
+                  <span className="text-xs">▼</span>
+                </button>
+
+                {showUserMenu && (
+                  <div className="absolute right-0 mt-2 w-72 bg-[#0f172a] border border-gray-700 rounded-xl shadow-2xl p-4 z-50 animate-fade-in">
+                    <div className="flex items-center space-x-3 mb-4 pb-4 border-b border-gray-700">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 flex items-center justify-center text-lg">
+                        👤
+                      </div>
+                      <div>
+                        <div className="text-sm font-bold text-white">Connected Wallet</div>
+                        <div className="text-xs text-gray-400 font-mono">{account.slice(0, 10)}...{account.slice(-8)}</div>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-3 mb-4">
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-gray-400">ETH Balance</span>
+                        <span className="font-bold text-white">{parseFloat(balance).toFixed(4)} ETH</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-gray-400">Network</span>
+                        <span className="text-green-400 flex items-center"><span className="w-2 h-2 bg-green-400 rounded-full mr-2"></span>Localhost</span>
+                      </div>
+                      {isAdmin && (
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-gray-400">Role</span>
+                          <span className="badge badge-warning text-xs">Administrator</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <button 
+                      onClick={() => {
+                        disconnectWallet();
+                        setShowUserMenu(false);
+                      }}
+                      className="w-full btn-outline text-red-400 hover:bg-red-500/10 hover:border-red-500/50 text-sm py-2"
+                    >
+                      Disconnect Wallet
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <button onClick={connectWallet} className="btn-primary">
@@ -193,6 +266,12 @@ function App() {
     }
   };
 
+  const disconnectWallet = () => {
+    setAccount(null);
+    setProvider(null);
+    setSigner(null);
+  };
+
   useEffect(() => {
     const autoConnect = async () => {
       if (window.ethereum) {
@@ -228,7 +307,7 @@ function App() {
   return (
     <Router>
       <div className="min-h-screen flex flex-col">
-        <Navigation account={account} connectWallet={connectWallet} />
+        <Navigation account={account} connectWallet={connectWallet} signer={signer} disconnectWallet={disconnectWallet} />
         <main className="container mx-auto px-6 py-12 flex-grow">
           <Routes>
             <Route path="/" element={<HomePage />} />

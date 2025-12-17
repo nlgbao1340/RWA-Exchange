@@ -15,9 +15,11 @@ function AdminMint({ signer, account }) {
   const [isOwner, setIsOwner] = useState(false);
   const [checkingOwner, setCheckingOwner] = useState(true);
   const [systemNFTs, setSystemNFTs] = useState([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const loadSystemNFTs = async () => {
     if (!signer) return;
+    setIsRefreshing(true);
     try {
       const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
       const oracleContract = new ethers.Contract(CONTRACTS.RWA_Oracle, RWA_Oracle_ABI.abi || RWA_Oracle_ABI, signer);
@@ -27,28 +29,43 @@ function AdminMint({ signer, account }) {
       
       // Loop through all tokens (in reverse to show newest first)
       for (let i = Number(total) - 1; i >= 0; i--) {
-        const tokenId = await nftContract.tokenByIndex(i);
-        const owner = await nftContract.ownerOf(tokenId);
-        const uri = await nftContract.tokenURI(tokenId);
-        
-        let price = '0';
-        const isPriced = await oracleContract.isPriceSet(tokenId);
-        if (isPriced) {
-          const priceWei = await oracleContract.getAssetPrice(tokenId);
-          price = ethers.formatUnits(priceWei, 6);
-        }
+        try {
+          const tokenId = await nftContract.tokenByIndex(i);
+          const owner = await nftContract.ownerOf(tokenId);
+          const uri = await nftContract.tokenURI(tokenId);
+          
+          let price = '0';
+          let isPriced = false;
+          try {
+            // Force a fresh call by not using a cached provider if possible, or just standard call
+            isPriced = await oracleContract.isPriceSet(tokenId);
+            if (isPriced) {
+              const priceWei = await oracleContract.getAssetPrice(tokenId);
+              price = ethers.formatUnits(priceWei, 6);
+              console.log(`Token ${tokenId} price: ${price}`);
+            } else {
+               console.log(`Token ${tokenId} has no price set.`);
+            }
+          } catch (priceErr) {
+            console.warn(`Price fetch failed for token ${tokenId}:`, priceErr);
+          }
 
-        items.push({
-          id: tokenId.toString(),
-          owner,
-          uri,
-          price,
-          isPriced
-        });
+          items.push({
+            id: tokenId.toString(),
+            owner,
+            uri,
+            price,
+            isPriced
+          });
+        } catch (itemErr) {
+          console.error(`Failed to load item at index ${i}:`, itemErr);
+        }
       }
       setSystemNFTs(items);
     } catch (error) {
       console.error("Failed to load system NFTs:", error);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -72,7 +89,7 @@ function AdminMint({ signer, account }) {
     if (isOwner && signer) {
       loadSystemNFTs();
     }
-  }, [isOwner, signer, loading, priceLoading]); // Reload when actions complete
+  }, [isOwner, signer]); // Removed loading dependencies to prevent race conditions
 
   if (!account) {
     return (
@@ -140,13 +157,23 @@ function AdminMint({ signer, account }) {
       const oracleContract = new ethers.Contract(CONTRACTS.RWA_Oracle, RWA_Oracle_ABI.abi || RWA_Oracle_ABI, signer);
       const priceInWei = ethers.parseUnits(assetPrice, 6);
       const tx = await oracleContract.setAssetPrice(priceTokenId, priceInWei);
-      await tx.wait();
+      console.log("Transaction sent:", tx.hash);
+      const receipt = await tx.wait();
+      console.log("Transaction confirmed:", receipt);
+      
       alert(`✅ Price for NFT #${priceTokenId} set to $${assetPrice} USDC`);
       setPriceTokenId(''); setAssetPrice('');
-      loadSystemNFTs(); // Refresh list
+      
+      // Small delay to ensure node indexing
+      setTimeout(() => {
+        loadSystemNFTs();
+      }, 1000);
     } catch (error) {
       console.error('Set price failed:', error);
-      alert('❌ Set price failed: ' + error.message);
+      if (error.data) {
+        console.error('Revert reason:', error.data);
+      }
+      alert('❌ Set price failed: ' + (error.reason || error.message));
     } finally {
       setPriceLoading(false);
     }
@@ -196,7 +223,9 @@ function AdminMint({ signer, account }) {
           <h3 className="text-2xl font-bold flex items-center space-x-3">
             <span>🗃️</span><span>System Assets Registry</span>
           </h3>
-          <button onClick={loadSystemNFTs} className="btn-outline text-sm px-3 py-1">🔄 Refresh</button>
+          <button onClick={loadSystemNFTs} disabled={isRefreshing} className="btn-outline text-sm px-3 py-1">
+            {isRefreshing ? '⏳ Refreshing...' : '🔄 Refresh'}
+          </button>
         </div>
         
         <div className="overflow-x-auto">

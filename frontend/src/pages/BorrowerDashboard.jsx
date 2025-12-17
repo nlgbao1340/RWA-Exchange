@@ -19,33 +19,74 @@ function BorrowerDashboard({ signer, account }) {
       const usdcContract = new ethers.Contract(CONTRACTS.MockUSDC, MockUSDC_ABI.abi || MockUSDC_ABI, signer);
 
       const balance = await nftContract.balanceOf(account);
+      console.log(`Account: ${account}, Balance: ${balance.toString()}`);
+      
       const walletList = [];
-      for (let i = 0; i < balance; i++) {
-        const tokenId = await nftContract.tokenOfOwnerByIndex(account, i);
-        const uri = await nftContract.tokenURI(tokenId);
-        const priceSet = await oracleContract.isPriceSet(tokenId);
-        let price = '0';
-        if (priceSet) {
-          const priceWei = await oracleContract.getAssetPrice(tokenId);
-          price = ethers.formatUnits(priceWei, 6);
+      const balanceNum = Number(balance);
+      
+      for (let i = 0; i < balanceNum; i++) {
+        try {
+          const tokenId = await nftContract.tokenOfOwnerByIndex(account, i);
+          const uri = await nftContract.tokenURI(tokenId);
+          let price = '0';
+          
+          try {
+            const priceSet = await oracleContract.isPriceSet(tokenId);
+            if (priceSet) {
+              const priceWei = await oracleContract.getAssetPrice(tokenId);
+              price = ethers.formatUnits(priceWei, 6);
+            }
+          } catch (priceErr) {
+            console.error(`Error fetching price for token ${tokenId}:`, priceErr);
+          }
+
+          walletList.push({ tokenId: tokenId.toString(), uri, price });
+        } catch (err) {
+          console.error(`Error loading wallet NFT at index ${i}:`, err);
         }
-        walletList.push({ tokenId: tokenId.toString(), uri, price });
       }
+      console.log("Wallet List:", walletList);
       setWalletNFTs(walletList);
 
       const vaultBalance = await nftContract.balanceOf(CONTRACTS.Vault);
+      console.log("Vault Balance:", vaultBalance.toString());
       const vaultList = [];
       for (let i = 0; i < vaultBalance; i++) {
-        const tokenId = await nftContract.tokenOfOwnerByIndex(CONTRACTS.Vault, i);
-        const position = await vaultContract.positions(tokenId);
-        if (position.borrower.toLowerCase() === account.toLowerCase()) {
-          const uri = await nftContract.tokenURI(tokenId);
-          const priceWei = await oracleContract.getAssetPrice(tokenId);
-          const price = ethers.formatUnits(priceWei, 6);
-          const debt = ethers.formatUnits(position.debt, 6);
-          const usdcBal = await usdcContract.balanceOf(account);
-          const usdcBalance = ethers.formatUnits(usdcBal, 6);
-          vaultList.push({ tokenId: tokenId.toString(), uri, price, debt, borrowed: debt, usdcBalance });
+        try {
+          const tokenId = await nftContract.tokenOfOwnerByIndex(CONTRACTS.Vault, i);
+          const position = await vaultContract.positions(tokenId);
+          
+          // Check if position belongs to current user (using 'owner' field from struct)
+          if (position.owner.toLowerCase() === account.toLowerCase()) {
+            const uri = await nftContract.tokenURI(tokenId);
+            
+            // Safe price fetching
+            let price = '0';
+            try {
+              const priceSet = await oracleContract.isPriceSet(tokenId);
+              if (priceSet) {
+                const priceWei = await oracleContract.getAssetPrice(tokenId);
+                price = ethers.formatUnits(priceWei, 6);
+              }
+            } catch (pErr) {
+              console.error("Vault price fetch error:", pErr);
+            }
+            
+            const debt = ethers.formatUnits(position.debt, 6);
+            const usdcBal = await usdcContract.balanceOf(account);
+            const usdcBalance = ethers.formatUnits(usdcBal, 6);
+            
+            vaultList.push({ 
+              tokenId: tokenId.toString(), 
+              uri, 
+              price, 
+              debt, 
+              borrowed: debt, 
+              usdcBalance 
+            });
+          }
+        } catch (err) {
+          console.error(`Error loading vault token at index ${i}:`, err);
         }
       }
       setVaultedNFTs(vaultList);
@@ -153,7 +194,10 @@ function BorrowerDashboard({ signer, account }) {
         <h1 className="text-5xl font-bold mb-4">
           <span className="gradient-text">Borrow Against Assets</span>
         </h1>
-        <p className="text-xl text-gray-400">Collateralize your RWA NFTs to borrow USDC</p>
+        <div className="flex items-center justify-center gap-3 mb-4">
+          <p className="text-xl text-gray-400">Collateralize your RWA NFTs to borrow USDC</p>
+          <button onClick={loadNFTs} className="btn btn-circle btn-ghost btn-sm" title="Refresh Data">🔄</button>
+        </div>
       </div>
 
       <div className="mb-12">
