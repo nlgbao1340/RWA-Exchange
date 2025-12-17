@@ -2,9 +2,7 @@
 
 ## ✅ YÊU CẦU TRƯỚC KHI CHẠY
 
-1. ✅ Node.js đã cài đặt
-2. ✅ MetaMask extension đã cài đặt trên browser
-3. ✅ Đã chạy `npm install` trong cả 2 thư mục `backend` và `frontend`
+1. ✅ Có Docker
 
 ---
 
