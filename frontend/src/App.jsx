@@ -15,6 +15,7 @@ function Navigation({ account, connectWallet, signer, disconnectWallet }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [balance, setBalance] = useState('0');
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const checkAdmin = async () => {
@@ -73,22 +74,49 @@ function Navigation({ account, connectWallet, signer, disconnectWallet }) {
               <div>
                 <button 
                   onClick={() => setShowUserMenu(!showUserMenu)}
-                  className="flex items-center space-x-3 glass-card px-4 py-2 hover:bg-white/10 transition-colors cursor-pointer"
+                  className="flex items-center space-x-3 glass-card px-4 py-2 hover:bg-white/10 transition-colors cursor-pointer group relative"
+                  title={account}
                 >
                   <div className="pulse-dot bg-green-400"></div>
-                  <span className="text-sm font-mono text-gray-300">{account.slice(0, 6)}...{account.slice(-4)}</span>
+                  <span className="text-sm font-mono text-gray-300 group-hover:text-white transition-colors">
+                    {account.slice(0, 6)}...{account.slice(-4)}
+                  </span>
                   <span className="text-xs">▼</span>
+                  
+                  {/* Tooltip for full address on hover */}
+                  <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-black/90 text-xs text-white px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 border border-white/10">
+                    {account}
+                  </div>
                 </button>
 
                 {showUserMenu && (
-                  <div className="absolute right-0 mt-2 w-72 bg-[#0f172a] border border-gray-700 rounded-xl shadow-2xl p-4 z-50 animate-fade-in">
+                  <div className="absolute right-0 mt-2 w-80 bg-[#0f172a] border border-gray-700 rounded-xl shadow-2xl p-4 z-50 animate-fade-in">
                     <div className="flex items-center space-x-3 mb-4 pb-4 border-b border-gray-700">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 flex items-center justify-center text-lg">
                         👤
                       </div>
-                      <div>
+                      <div className="flex-1 min-w-0">
                         <div className="text-sm font-bold text-white">Connected Wallet</div>
-                        <div className="text-xs text-gray-400 font-mono">{account.slice(0, 10)}...{account.slice(-8)}</div>
+                        <div 
+                          className="text-xs text-gray-400 font-mono cursor-pointer hover:text-blue-400 transition-colors flex items-center gap-2 group/addr relative"
+                          onClick={() => {
+                            navigator.clipboard.writeText(account);
+                            setCopied(true);
+                            setTimeout(() => setCopied(false), 2000);
+                          }}
+                        >
+                          <span>{account.slice(0, 10)}...{account.slice(-8)}</span>
+                          {copied ? (
+                            <span className="text-green-400 font-bold text-[10px] bg-green-400/10 px-1 rounded">✓ Copied</span>
+                          ) : (
+                            <span className="opacity-0 group-hover/addr:opacity-100">📋</span>
+                          )}
+                          
+                          {/* Tooltip on hover */}
+                          <div className="absolute bottom-full mb-2 left-0 bg-black/90 text-xs text-white px-2 py-1 rounded opacity-0 group-hover/addr:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 border border-white/10">
+                            {account}
+                          </div>
+                        </div>
                       </div>
                     </div>
                     

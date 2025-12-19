@@ -5,10 +5,44 @@ import LiquidationManager_ABI from '../abis/LiquidationManager.json';
 import RWA_NFT_ABI from '../abis/RWA_NFT.json';
 import RWA_Oracle_ABI from '../abis/RWA_Oracle.json';
 import MockUSDC_ABI from '../abis/MockUSDC.json';
+import Vault_ABI from '../abis/Vault.json';
 
 function Auctions({ signer, account }) {
   const [auctions, setAuctions] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [liquidatablePositions, setLiquidatablePositions] = useState([]);
+
+  const loadLiquidatablePositions = async () => {
+    try {
+      const vaultContract = new ethers.Contract(CONTRACTS.Vault, Vault_ABI.abi || Vault_ABI, signer);
+      const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
+      const liquidationContract = new ethers.Contract(CONTRACTS.LiquidationManager, LiquidationManager_ABI.abi || LiquidationManager_ABI, signer);
+      const oracleContract = new ethers.Contract(CONTRACTS.RWA_Oracle, RWA_Oracle_ABI.abi || RWA_Oracle_ABI, signer);
+
+      const vaultBalance = await nftContract.balanceOf(CONTRACTS.Vault);
+      const riskyList = [];
+
+      for (let i = 0; i < vaultBalance; i++) {
+        const tokenId = await nftContract.tokenOfOwnerByIndex(CONTRACTS.Vault, i);
+        const isHealthy = await liquidationContract.checkHealth(tokenId);
+        
+        if (!isHealthy) {
+          const position = await vaultContract.positions(tokenId);
+          const priceWei = await oracleContract.getAssetPrice(tokenId);
+          
+          riskyList.push({
+            tokenId: tokenId.toString(),
+            debt: ethers.formatUnits(position.debt, 6),
+            price: ethers.formatUnits(priceWei, 6),
+            owner: position.owner
+          });
+        }
+      }
+      setLiquidatablePositions(riskyList);
+    } catch (error) {
+      console.error('Load risky positions failed:', error);
+    }
+  };
 
   const loadAuctions = async () => {
     try {
@@ -52,7 +86,11 @@ function Auctions({ signer, account }) {
   useEffect(() => {
     if (signer && account) {
       loadAuctions();
-      const interval = setInterval(loadAuctions, 10000);
+      loadLiquidatablePositions();
+      const interval = setInterval(() => {
+        loadAuctions();
+        loadLiquidatablePositions();
+      }, 10000);
       return () => clearInterval(interval);
     }
   }, [signer, account]);
@@ -96,6 +134,23 @@ function Auctions({ signer, account }) {
     }
   };
 
+  const handleStartAuction = async (tokenId) => {
+    setLoading(true);
+    try {
+      const liquidationContract = new ethers.Contract(CONTRACTS.LiquidationManager, LiquidationManager_ABI.abi || LiquidationManager_ABI, signer);
+      const tx = await liquidationContract.startAuction(tokenId);
+      await tx.wait();
+      alert('✅ Auction started successfully!');
+      loadAuctions();
+      loadLiquidatablePositions();
+    } catch (error) {
+      console.error('Start auction failed:', error);
+      alert('❌ Start auction failed: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const formatTimeLeft = (seconds) => {
     if (seconds <= 0) return 'Ended';
     const days = Math.floor(seconds / 86400);
@@ -125,160 +180,192 @@ function Auctions({ signer, account }) {
     <div className="max-w-7xl mx-auto">
       <div className="mb-12 text-center">
         <div className="inline-block mb-4">
-          <span className="badge badge-danger text-base px-4 py-2">⚡ Liquidation Auctions</span>
+          <span className="badge badge-error text-base px-4 py-2">⚡ Liquidation Zone</span>
         </div>
         <h1 className="text-5xl font-bold mb-4">
-          <span className="gradient-text-2">Active Auctions</span>
+          <span className="gradient-text">Asset Auctions</span>
         </h1>
-        <p className="text-xl text-gray-400">Bid on liquidated collateral - 3-day English auction</p>
+        <p className="text-xl text-gray-400">Bid on liquidated RWA assets at discounted prices</p>
       </div>
 
-      {auctions.length === 0 ? (
-        <div className="premium-card text-center p-12">
-          <div className="text-6xl mb-4">✅</div>
-          <h3 className="text-xl font-bold mb-2">No Active Auctions</h3>
-          <p className="text-gray-400">All positions are healthy. Check back later for liquidation opportunities.</p>
+      {/* Risky Positions Section */}
+      {liquidatablePositions.length > 0 && (
+        <div className="mb-12">
+          <h2 className="text-2xl font-bold mb-6 flex items-center space-x-3 text-red-400">
+            <span>⚠️</span><span>Risky Positions (Ready for Liquidation)</span>
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {liquidatablePositions.map((pos) => (
+              <div key={pos.tokenId} className="premium-card border-red-500/30 bg-red-500/5">
+                <div className="flex justify-between items-start mb-4">
+                  <span className="badge badge-error">NFT #{pos.tokenId}</span>
+                  <span className="text-xs font-mono text-gray-400">Owner: {pos.owner.slice(0,6)}...</span>
+                </div>
+                <div className="space-y-2 mb-6">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Debt</span>
+                    <span className="font-bold text-red-400">${pos.debt}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Collateral Value</span>
+                    <span className="font-bold">${pos.price}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Health</span>
+                    <span className="font-bold text-red-500">CRITICAL</span>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => handleStartAuction(pos.tokenId)}
+                  disabled={loading}
+                  className="btn-primary w-full bg-red-500 hover:bg-red-600 border-red-500"
+                >
+                  {loading ? 'Processing...' : '⚡ Trigger Liquidation'}
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-6">
-          {auctions.map((auction) => {
-            const isWinning = auction.highestBidder.toLowerCase() === account.toLowerCase();
-            const hasEnded = auction.timeLeft <= 0;
-            const minNextBid = parseFloat(auction.currentBid) > 0 ? parseFloat(auction.currentBid) * 1.05 : parseFloat(auction.debt);
+      )}
 
-            return (
-              <div key={auction.tokenId} className="premium-card animated-border relative overflow-hidden">
-                {isWinning && !hasEnded && (
-                  <div className="absolute top-4 right-4 badge badge-success animate-pulse">
-                    💎 You're Winning!
-                  </div>
-                )}
-                
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                  <div>
-                    <div className="flex items-center space-x-3 mb-4">
-                      <span className="text-3xl">💎</span>
-                      <div>
-                        <div className="text-sm text-gray-400">Auction</div>
-                        <div className="font-bold text-xl">NFT #{auction.tokenId}</div>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <div>
-                        <div className="text-xs text-gray-400">Asset Value</div>
-                        <div className="text-lg font-bold gradient-text">${parseFloat(auction.price).toLocaleString()}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-400">Outstanding Debt</div>
-                        <div className="text-lg font-bold gradient-text-2">${parseFloat(auction.debt).toLocaleString()}</div>
-                      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+        {auctions.map((auction) => {
+          const isWinning = auction.highestBidder.toLowerCase() === account.toLowerCase();
+          const hasEnded = auction.timeLeft <= 0;
+          const minNextBid = parseFloat(auction.currentBid) > 0 ? parseFloat(auction.currentBid) * 1.05 : parseFloat(auction.debt);
+
+          return (
+            <div key={auction.tokenId} className="premium-card animated-border relative overflow-hidden">
+              {isWinning && !hasEnded && (
+                <div className="absolute top-4 right-4 badge badge-success animate-pulse">
+                  💎 You're Winning!
+                </div>
+              )}
+              
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                <div>
+                  <div className="flex items-center space-x-3 mb-4">
+                    <span className="text-3xl">💎</span>
+                    <div>
+                      <div className="text-sm text-gray-400">Auction</div>
+                      <div className="font-bold text-xl">NFT #{auction.tokenId}</div>
                     </div>
                   </div>
-
-                  <div>
-                    <h4 className="font-bold mb-4 flex items-center space-x-2">
-                      <span>💎</span><span>Current Bid</span>
-                    </h4>
-                    <div className="mb-4">
-                      {parseFloat(auction.currentBid) > 0 ? (
-                        <>
-                          <div className="text-3xl font-bold gradient-text-3">${parseFloat(auction.currentBid).toLocaleString()}</div>
-                          <div className="text-xs text-gray-400 mt-1">
-                            by {auction.highestBidder.slice(0, 6)}...{auction.highestBidder.slice(-4)}
-                          </div>
-                        </>
-                      ) : (
-                        <div className="text-2xl font-bold text-gray-500">No bids yet</div>
-                      )}
+                  <div className="space-y-2">
+                    <div>
+                      <div className="text-xs text-gray-400">Asset Value</div>
+                      <div className="text-lg font-bold gradient-text">${parseFloat(auction.price).toLocaleString()}</div>
                     </div>
-                    <div className="glass-card p-3 border border-yellow-500/30">
-                      <div className="text-xs text-gray-400">Minimum Next Bid</div>
-                      <div className="text-lg font-bold text-yellow-300">${minNextBid.toLocaleString()}</div>
-                      <div className="text-xs text-gray-500 mt-1">+5% increment</div>
+                    <div>
+                      <div className="text-xs text-gray-400">Outstanding Debt</div>
+                      <div className="text-lg font-bold gradient-text-2">${parseFloat(auction.debt).toLocaleString()}</div>
                     </div>
-                  </div>
-
-                  <div>
-                    <h4 className="font-bold mb-4 flex items-center space-x-2">
-                      <span>⏰</span><span>Time Remaining</span>
-                    </h4>
-                    <div className="mb-4">
-                      <div className={`text-3xl font-bold ${auction.timeLeft > 86400 ? 'gradient-text' : auction.timeLeft > 3600 ? 'text-yellow-400' : 'text-red-400'}`}>
-                        {formatTimeLeft(auction.timeLeft)}
-                      </div>
-                      <div className="text-xs text-gray-400 mt-1">
-                        Ends: {new Date(auction.endTime * 1000).toLocaleString()}
-                      </div>
-                    </div>
-                    {hasEnded ? (
-                      <div className="badge badge-danger w-full py-2">⏱️ Auction Ended</div>
-                    ) : (
-                      <div className="badge badge-warning w-full py-2">💎 Live Auction</div>
-                    )}
-                  </div>
-
-                  <div>
-                    <h4 className="font-bold mb-4 flex items-center space-x-2">
-                      <span>💎</span><span>Actions</span>
-                    </h4>
-                    {!hasEnded ? (
-                      <div className="space-y-3">
-                        <div className="glass-card p-3 border border-blue-500/30">
-                          <div className="text-xs text-gray-400 mb-1">Potential Profit</div>
-                          <div className="text-lg font-bold gradient-text-3">
-                            ${(parseFloat(auction.price) - minNextBid).toLocaleString()}
-                          </div>
-                          <div className="text-xs text-gray-500">{((parseFloat(auction.price) - minNextBid) / minNextBid * 100).toFixed(1)}% gain</div>
-                        </div>
-                        <button
-                          onClick={() => {
-                            const amount = prompt('Enter your bid amount (USDC):', minNextBid.toFixed(2));
-                            if (amount && parseFloat(amount) >= minNextBid) {
-                              handleBid(auction.tokenId, amount);
-                            } else if (amount) {
-                              alert('Bid must be at least $' + minNextBid.toFixed(2));
-                            }
-                          }}
-                          disabled={loading}
-                          className="btn-primary w-full"
-                        >
-                          {loading ? '⚙️' : '💎'} {loading ? 'Processing...' : 'Place Bid'}
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => handleEndAuction(auction.tokenId)}
-                        disabled={loading}
-                        className="btn-success w-full"
-                      >
-                        {loading ? '⚙️' : '💎'} {loading ? 'Processing...' : 'End Auction'}
-                      </button>
-                    )}
                   </div>
                 </div>
 
-                <div className="mt-6 pt-6 border-t border-white/10">
-                  <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center space-x-4">
-                      <div>
-                        <span className="text-gray-400">Health Status:</span>
-                        <span className="ml-2 badge badge-danger">Liquidating</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-400">Auction Type:</span>
-                        <span className="ml-2 text-white font-semibold">English Auction (3 days)</span>
-                      </div>
+                <div>
+                  <h4 className="font-bold mb-4 flex items-center space-x-2">
+                    <span>💎</span><span>Current Bid</span>
+                  </h4>
+                  <div className="mb-4">
+                    {parseFloat(auction.currentBid) > 0 ? (
+                      <>
+                        <div className="text-3xl font-bold gradient-text-3">${parseFloat(auction.currentBid).toLocaleString()}</div>
+                        <div className="text-xs text-gray-400 mt-1">
+                          by {auction.highestBidder.slice(0, 6)}...{auction.highestBidder.slice(-4)}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-2xl font-bold text-gray-500">No bids yet</div>
+                    )}
+                  </div>
+                  <div className="glass-card p-3 border border-yellow-500/30">
+                    <div className="text-xs text-gray-400">Minimum Next Bid</div>
+                    <div className="text-lg font-bold text-yellow-300">${minNextBid.toLocaleString()}</div>
+                    <div className="text-xs text-gray-500 mt-1">+5% increment</div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="font-bold mb-4 flex items-center space-x-2">
+                    <span>⏰</span><span>Time Remaining</span>
+                  </h4>
+                  <div className="mb-4">
+                    <div className={`text-3xl font-bold ${auction.timeLeft > 86400 ? 'gradient-text' : auction.timeLeft > 3600 ? 'text-yellow-400' : 'text-red-400'}`}>
+                      {formatTimeLeft(auction.timeLeft)}
                     </div>
-                    <div className="text-gray-400">
-                      {isWinning ? '💎 Your bid is winning!' : '💎 Place a bid to win this NFT'}
+                    <div className="text-xs text-gray-400 mt-1">
+                      Ends: {new Date(auction.endTime * 1000).toLocaleString()}
                     </div>
+                  </div>
+                  {hasEnded ? (
+                    <div className="badge badge-danger w-full py-2">⏱️ Auction Ended</div>
+                  ) : (
+                    <div className="badge badge-warning w-full py-2">💎 Live Auction</div>
+                  )}
+                </div>
+
+                <div>
+                  <h4 className="font-bold mb-4 flex items-center space-x-2">
+                    <span>💎</span><span>Actions</span>
+                  </h4>
+                  {!hasEnded ? (
+                    <div className="space-y-3">
+                      <div className="glass-card p-3 border border-blue-500/30">
+                        <div className="text-xs text-gray-400 mb-1">Potential Profit</div>
+                        <div className="text-lg font-bold gradient-text-3">
+                          ${(parseFloat(auction.price) - minNextBid).toLocaleString()}
+                        </div>
+                        <div className="text-xs text-gray-500">{((parseFloat(auction.price) - minNextBid) / minNextBid * 100).toFixed(1)}% gain</div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          const amount = prompt('Enter your bid amount (USDC):', minNextBid.toFixed(2));
+                          if (amount && parseFloat(amount) >= minNextBid) {
+                            handleBid(auction.tokenId, amount);
+                          } else if (amount) {
+                            alert('Bid must be at least $' + minNextBid.toFixed(2));
+                          }
+                        }}
+                        disabled={loading}
+                        className="btn-primary w-full"
+                      >
+                        {loading ? '⚙️' : '💎'} {loading ? 'Processing...' : 'Place Bid'}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleEndAuction(auction.tokenId)}
+                      disabled={loading}
+                      className="btn-success w-full"
+                    >
+                      {loading ? '⚙️' : '💎'} {loading ? 'Processing...' : 'End Auction'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6 pt-6 border-t border-white/10">
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center space-x-4">
+                    <div>
+                      <span className="text-gray-400">Health Status:</span>
+                      <span className="ml-2 badge badge-danger">Liquidating</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400">Auction Type:</span>
+                      <span className="ml-2 text-white font-semibold">English Auction (3 days)</span>
+                    </div>
+                  </div>
+                  <div className="text-gray-400">
+                    {isWinning ? '💎 Your bid is winning!' : '💎 Place a bid to win this NFT'}
                   </div>
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
+            </div>
+          );
+        })}
+      </div>
 
       <div className="premium-card mt-8">
         <h3 className="text-2xl font-bold mb-6 flex items-center space-x-3">

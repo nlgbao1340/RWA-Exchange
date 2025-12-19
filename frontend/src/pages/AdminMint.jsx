@@ -4,6 +4,35 @@ import { CONTRACTS } from '../config/contracts';
 import RWA_NFT_ABI from '../abis/RWA_NFT.json';
 import RWA_Oracle_ABI from '../abis/RWA_Oracle.json';
 
+const AddressDisplay = ({ address, isCurrentUser }) => {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <div 
+      className="font-mono text-xs text-gray-400 cursor-pointer hover:text-blue-400 transition-colors flex items-center gap-2 group relative w-fit"
+      onClick={() => {
+        navigator.clipboard.writeText(address);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+    >
+      <span>{address.slice(0, 6)}...{address.slice(-4)}</span>
+      {isCurrentUser && <span className="text-xs bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded">You</span>}
+      
+      {copied ? (
+        <span className="text-green-400 font-bold text-[10px] bg-green-400/10 px-1 rounded">✓</span>
+      ) : (
+        <span className="opacity-0 group-hover:opacity-100">📋</span>
+      )}
+      
+      {/* Tooltip on hover */}
+      <div className="absolute bottom-full mb-2 left-0 bg-black/90 text-xs text-white px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50 border border-white/10">
+        {address}
+      </div>
+    </div>
+  );
+};
+
 function AdminMint({ signer, account }) {
   const [nftRecipient, setNftRecipient] = useState('');
   const [tokenId, setTokenId] = useState('');
@@ -248,9 +277,11 @@ function AdminMint({ signer, account }) {
                 systemNFTs.map((nft) => (
                   <tr key={nft.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
                     <td className="p-4 font-mono text-purple-300">#{nft.id}</td>
-                    <td className="p-4 font-mono text-xs text-gray-400">
-                      {nft.owner.slice(0, 6)}...{nft.owner.slice(-4)}
-                      {nft.owner.toLowerCase() === account.toLowerCase() && <span className="ml-2 text-xs bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded">You</span>}
+                    <td className="p-4">
+                      <AddressDisplay 
+                        address={nft.owner} 
+                        isCurrentUser={nft.owner.toLowerCase() === account.toLowerCase()} 
+                      />
                     </td>
                     <td className="p-4 text-sm text-gray-400 truncate max-w-[150px]">{nft.uri}</td>
                     <td className="p-4">
