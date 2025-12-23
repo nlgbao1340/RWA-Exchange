@@ -1,16 +1,16 @@
- // Contract addresses - Updated after deployment
-
+// Contract addresses - Updated after deployment
+// TODO: Replace these addresses with your deployed Sepolia contract addresses
 export const CONTRACTS = {
-  MockUSDC: "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-  RWA_NFT: "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
-  RWA_Oracle: "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
-  LendingPool: "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
-  Vault: "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
-  LiquidationManager: "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"
+  MockUSDC: "0x0CD992d3b0eB856AFAd47CAC8101A4927AeEf482",
+  RWA_NFT: "0x9C1E0181Fa6D35171dB1370F3DAEd70347CfA888",
+  RWA_Oracle: "0x319dEaB69053FdA0ee93116923E8733C52675062",
+  LendingPool: "0xE81C55330965B3858D13ddD89fD97D97AeCE8BAb",
+  Vault: "0x7c7d53F911A3fdEd616015767b423e2E9EB50993",
+  LiquidationManager: "0xbD5d782a84E11cA04627564A00e970F360d67ac8"
 };
 
 export const NETWORK = {
-  chainId: 31337,
-  name: "Hardhat Local",
-  rpcUrl: "http://127.0.0.1:8545"
+  chainId: 11155111,
+  name: "Sepolia",
+  rpcUrl: "https://eth-sepolia.g.alchemy.com/v2/DEVIJduNWhRmzzQXinweK"
 };

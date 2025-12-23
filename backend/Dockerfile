@@ -1,16 +1,12 @@
 FROM node:20-alpine
-
 WORKDIR /app
 
-# Install netcat for wait-for-it logic if needed, though we might use sleep
-RUN apk add --no-cache netcat-openbsd
-
 COPY package*.json ./
+
+# Install deps from package-lock if it exists
 RUN npm install
+RUN npm ci
 
 COPY . .
 
-EXPOSE 8545
-
-CMD ["npx", "hardhat", "node"]
-
+CMD ["sh", "-c", "npx hardhat compile && npx hardhat run scripts/deploy.js --network sepolia"]

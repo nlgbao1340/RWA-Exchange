@@ -99,7 +99,7 @@ function Navigation({ account, connectWallet, signer, disconnectWallet }) {
                       </div>
                       <div className="flex justify-between items-center text-sm">
                         <span className="text-gray-400">Network</span>
-                        <span className="text-green-400 flex items-center"><span className="w-2 h-2 bg-green-400 rounded-full mr-2"></span>Localhost</span>
+                        <span className="text-green-400 flex items-center"><span className="w-2 h-2 bg-green-400 rounded-full mr-2"></span>{NETWORK.name}</span>
                       </div>
                       {isAdmin && (
                         <div className="flex justify-between items-center text-sm">
@@ -237,8 +237,8 @@ function App() {
   useEffect(() => {
     const initReadOnlyProvider = async () => {
       try {
-        // Create read-only provider using JsonRpcProvider for localhost
-        const rpcProvider = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
+        // Create read-only provider using JsonRpcProvider
+        const rpcProvider = new ethers.JsonRpcProvider(NETWORK.rpcUrl);
         setReadOnlyProvider(rpcProvider);
         console.log('[App] Read-only provider initialized');
       } catch (error) {

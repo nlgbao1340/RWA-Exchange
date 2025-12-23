@@ -61,8 +61,8 @@ async function main() {
   const liquidationAddress = await liquidationManager.getAddress();
   console.log(" LiquidationManager deployed to:", liquidationAddress, "\n");
 
-  // 7. Liên k?t các contracts
-  console.log("7 Liên k?t các contracts...");
+  // 7. Liï¿½n k?t cï¿½c contracts
+  console.log("7 Liï¿½n k?t cï¿½c contracts...");
   
   // Set Vault trong LendingPool
   const setVaultTx = await lendingPool.setVault(vaultAddress);
