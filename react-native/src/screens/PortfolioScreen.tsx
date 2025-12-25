@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator, Alert, Image, useColorScheme, Modal, TextInput } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { ethers } from 'ethers';
 import { CONTRACTS, NETWORK } from '../config/contracts';
 import RWA_NFT_ABI from '../abis/RWA_NFT.json';
@@ -10,6 +11,7 @@ import { useWallet } from '../context/WalletContext';
 
 export default function PortfolioScreen() {
   const { account, signer, isConnected } = useWallet();
+  const navigation = useNavigation<any>();
   const colorScheme = useColorScheme();
   const isDarkMode = colorScheme === 'dark';
   const [walletNFTs, setWalletNFTs] = useState<any[]>([]);
@@ -207,7 +209,7 @@ export default function PortfolioScreen() {
                 <Text className="text-slate-900 dark:text-white font-bold mb-1">RWA #{nft.tokenId}</Text>
                 <Text className="text-slate-500 dark:text-slate-400 text-xs mb-4">Status: In Wallet</Text>
                 <TouchableOpacity 
-                  // onPress={() => navigation.navigate('Market')}
+                  onPress={() => navigation.navigate('Market', { tab: 'borrow' })}
                   className="bg-indigo-50 dark:bg-indigo-900/20 py-2 rounded-xl items-center"
                 >
                   <Text className="text-indigo-600 dark:text-indigo-400 font-bold text-xs">Borrow Against</Text>
