@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { CONTRACTS } from '../config/contracts';
 import RWA_NFT_ABI from '../abis/RWA_NFT.json';
 import RWA_Oracle_ABI from '../abis/RWA_Oracle.json';
+import Vault_ABI from '../abis/Vault.json';
 
 const AddressDisplay = ({ address, isCurrentUser }) => {
   const [copied, setCopied] = useState(false);
@@ -52,6 +53,7 @@ function AdminMint({ signer, account }) {
     try {
       const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
       const oracleContract = new ethers.Contract(CONTRACTS.RWA_Oracle, RWA_Oracle_ABI.abi || RWA_Oracle_ABI, signer);
+      const vaultContract = new ethers.Contract(CONTRACTS.Vault, Vault_ABI.abi || Vault_ABI, signer);
       
       const total = await nftContract.totalSupply();
       const items = [];
@@ -60,8 +62,18 @@ function AdminMint({ signer, account }) {
       for (let i = Number(total) - 1; i >= 0; i--) {
         try {
           const tokenId = await nftContract.tokenByIndex(i);
-          const owner = await nftContract.ownerOf(tokenId);
+          let owner = await nftContract.ownerOf(tokenId);
           const uri = await nftContract.tokenURI(tokenId);
+          
+          // If owner is Vault, get the actual borrower
+          if (owner.toLowerCase() === CONTRACTS.Vault.toLowerCase()) {
+            try {
+              const position = await vaultContract.positions(tokenId);
+              owner = position.owner;
+            } catch (vErr) {
+              console.warn(`Failed to get vault position for token ${tokenId}:`, vErr);
+            }
+          }
           
           let price = '0';
           let isPriced = false;
