@@ -290,6 +290,12 @@ export default function HomeScreen() {
               onPress={() => navigation.navigate('Activity')}
               color="bg-purple-50 dark:bg-purple-900/20"
             />
+            <QuickAction 
+              icon={<Gavel color="#f59e0b" size={24} />} 
+              label="Auctions" 
+              onPress={() => navigation.navigate('Auctions')}
+              color="bg-amber-50 dark:bg-amber-900/20"
+            />
             {isConnected && isAdmin && (
               <QuickAction 
                 icon={<Shield color="#475569" size={24} />} 

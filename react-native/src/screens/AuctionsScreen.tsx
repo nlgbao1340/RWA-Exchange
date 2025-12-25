@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, RefreshControl, Alert, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { ethers } from 'ethers';
 import { CONTRACTS, NETWORK } from '../config/contracts';
 import LiquidationManagerABI from '../abis/LiquidationManager.json';
 import RWA_NFT_ABI from '../abis/RWA_NFT.json';
 import MockUSDC_ABI from '../abis/MockUSDC.json';
-import { Gavel, Clock, User } from 'lucide-react-native';
+import { Gavel, Clock, User, X } from 'lucide-react-native';
 import { useWallet } from '../context/WalletContext';
 
 export default function AuctionsScreen() {
@@ -13,6 +13,10 @@ export default function AuctionsScreen() {
   const [auctions, setAuctions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [bidModalVisible, setBidModalVisible] = useState(false);
+  const [selectedTokenId, setSelectedTokenId] = useState<number | null>(null);
+  const [bidAmount, setBidAmount] = useState('');
+  const [minBid, setMinBid] = useState('0');
 
   const loadData = async () => {
     try {
@@ -65,47 +69,58 @@ export default function AuctionsScreen() {
     }
 
     try {
+      const provider = new ethers.JsonRpcProvider(NETWORK.rpcUrl);
+      const liquidationManager = new ethers.Contract(CONTRACTS.LiquidationManager, LiquidationManagerABI.abi, provider);
+      const auction = await liquidationManager.getAuction(tokenId);
+      
+      const currentHighest = Number(ethers.formatUnits(auction.highestBid, 6));
+      const minimum = currentHighest === 0 ? Number(ethers.formatUnits(auction.originalDebt, 6)) : currentHighest + 1;
+      
+      setSelectedTokenId(tokenId);
+      setMinBid(minimum.toString());
+      setBidAmount(minimum.toString());
+      setBidModalVisible(true);
+    } catch (error: any) {
+      Alert.alert("Error", error.message);
+    }
+  };
+
+  const confirmBid = async () => {
+    if (!selectedTokenId || !bidAmount || isNaN(Number(bidAmount))) {
+      Alert.alert("Error", "Please enter a valid amount");
+      return;
+    }
+
+    if (Number(bidAmount) < Number(minBid)) {
+      Alert.alert("Error", `Minimum bid is $${minBid}`);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setBidModalVisible(false);
+      
       const liquidationManager = new ethers.Contract(CONTRACTS.LiquidationManager, LiquidationManagerABI.abi, signer);
       const usdc = new ethers.Contract(CONTRACTS.MockUSDC, MockUSDC_ABI.abi, signer);
 
-      const auction = await liquidationManager.getAuction(tokenId);
-      const minBid = Number(ethers.formatUnits(auction.highestBid, 6)) + 10; // Bid 10 USDC more
+      const amount = ethers.parseUnits(bidAmount, 6);
+      
+      // Check allowance
+      const allowance = await usdc.allowance(account, CONTRACTS.LiquidationManager);
+      if (allowance < amount) {
+        const txApprove = await usdc.approve(CONTRACTS.LiquidationManager, ethers.MaxUint256);
+        await txApprove.wait();
+      }
 
-      Alert.alert(
-        "Place Bid",
-        `Do you want to bid $${minBid} for Token #${tokenId}?`,
-        [
-          { text: "Cancel", style: "cancel" },
-          { 
-            text: "Confirm Bid", 
-            onPress: async () => {
-              try {
-                setLoading(true);
-                const amount = ethers.parseUnits(minBid.toString(), 6);
-                
-                // Check allowance
-                const allowance = await usdc.allowance(account, CONTRACTS.LiquidationManager);
-                if (allowance < amount) {
-                  const txApprove = await usdc.approve(CONTRACTS.LiquidationManager, ethers.MaxUint256);
-                  await txApprove.wait();
-                }
-
-                const tx = await liquidationManager.bid(tokenId, amount);
-                await tx.wait();
-                
-                Alert.alert("Success", "Your bid has been placed!");
-                loadData();
-              } catch (err: any) {
-                Alert.alert("Error", err.message || "Failed to place bid");
-              } finally {
-                setLoading(false);
-              }
-            }
-          }
-        ]
-      );
-    } catch (error: any) {
-      Alert.alert("Error", error.message);
+      const tx = await liquidationManager.bid(selectedTokenId, amount);
+      await tx.wait();
+      
+      Alert.alert("Success", "Your bid has been placed!");
+      loadData();
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Failed to place bid");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -196,6 +211,47 @@ export default function AuctionsScreen() {
           ))
         )}
       </View>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={bidModalVisible}
+        onRequestClose={() => setBidModalVisible(false)}
+      >
+        <View className="flex-1 justify-end bg-black/50">
+          <View className="bg-white rounded-t-[40px] p-8">
+            <View className="flex-row justify-between items-center mb-6">
+              <Text className="text-2xl font-bold text-slate-900">Place Bid</Text>
+              <TouchableOpacity 
+                onPress={() => setBidModalVisible(false)}
+                className="bg-slate-100 p-2 rounded-full"
+              >
+                <X color="#64748b" size={20} />
+              </TouchableOpacity>
+            </View>
+
+            <Text className="text-slate-500 mb-2">Enter your bid amount (Min: ${minBid})</Text>
+            <View className="bg-slate-50 rounded-2xl p-4 mb-6 border border-slate-100">
+              <TextInput
+                className="text-3xl font-bold text-slate-900"
+                keyboardType="numeric"
+                value={bidAmount}
+                onChangeText={setBidAmount}
+                placeholder="0.00"
+                autoFocus
+              />
+              <Text className="text-slate-400 font-bold mt-1">USDC</Text>
+            </View>
+
+            <TouchableOpacity 
+              onPress={confirmBid}
+              className="bg-indigo-600 p-5 rounded-2xl items-center shadow-lg shadow-indigo-200"
+            >
+              <Text className="text-white font-black text-lg uppercase tracking-widest">Confirm Bid</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
