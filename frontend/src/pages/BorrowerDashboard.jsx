@@ -105,16 +105,32 @@ function BorrowerDashboard({ signer, account }) {
     setLoading(true);
     try {
       const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
-      const approveTx = await nftContract.approve(CONTRACTS.Vault, tokenId);
-      await approveTx.wait();
+      
+      // Check approval first to avoid unnecessary tx
+      const approvedAddress = await nftContract.getApproved(tokenId);
+      const isApprovedForAll = await nftContract.isApprovedForAll(account, CONTRACTS.Vault);
+      
+      if (approvedAddress.toLowerCase() !== CONTRACTS.Vault.toLowerCase() && !isApprovedForAll) {
+        console.log("Approving NFT...");
+        const approveTx = await nftContract.approve(CONTRACTS.Vault, tokenId);
+        await approveTx.wait();
+      }
+
       const vaultContract = new ethers.Contract(CONTRACTS.Vault, Vault_ABI.abi || Vault_ABI, signer);
-      const depositTx = await vaultContract.depositCollateral(tokenId);
+      console.log("Depositing collateral...");
+      // Manual gas limit
+      const depositTx = await vaultContract.depositCollateral(tokenId, { gasLimit: 300000 });
       await depositTx.wait();
+      
       alert('✅ Collateral deposited successfully!');
       loadNFTs();
     } catch (error) {
       console.error('Deposit failed:', error);
-      alert('❌ Deposit failed: ' + error.message);
+      let errorMessage = error.message;
+      if (error.reason) errorMessage = error.reason;
+      if (error.info?.error?.message) errorMessage = error.info.error.message;
+      if (errorMessage.includes("missing revert data")) errorMessage = "Transaction failed. Possible reasons: Not owner or contract paused.";
+      alert('❌ Deposit failed: ' + errorMessage);
     } finally {
       setLoading(false);
     }
@@ -125,13 +141,20 @@ function BorrowerDashboard({ signer, account }) {
     try {
       const vaultContract = new ethers.Contract(CONTRACTS.Vault, Vault_ABI.abi || Vault_ABI, signer);
       const amountWei = ethers.parseUnits(amount, 6);
-      const tx = await vaultContract.borrow(tokenId, amountWei);
+      
+      // Manual gas limit
+      const tx = await vaultContract.borrow(tokenId, amountWei, { gasLimit: 300000 });
       await tx.wait();
+      
       alert('✅ Borrowed ' + amount + ' USDC successfully!');
       loadNFTs();
     } catch (error) {
       console.error('Borrow failed:', error);
-      alert('❌ Borrow failed: ' + error.message);
+      let errorMessage = error.message;
+      if (error.reason) errorMessage = error.reason;
+      if (error.info?.error?.message) errorMessage = error.info.error.message;
+      if (errorMessage.includes("missing revert data")) errorMessage = "Transaction failed. Possible reasons: Exceeds LTV or insufficient pool liquidity.";
+      alert('❌ Borrow failed: ' + errorMessage);
     } finally {
       setLoading(false);
     }
@@ -143,15 +166,35 @@ function BorrowerDashboard({ signer, account }) {
       const usdcContract = new ethers.Contract(CONTRACTS.MockUSDC, MockUSDC_ABI.abi || MockUSDC_ABI, signer);
       const vaultContract = new ethers.Contract(CONTRACTS.Vault, Vault_ABI.abi || Vault_ABI, signer);
       const amountWei = ethers.parseUnits(amount, 6);
-      const approveTx = await usdcContract.approve(CONTRACTS.Vault, amountWei);
-      await approveTx.wait();
-      const repayTx = await vaultContract.repay(tokenId, amountWei);
+      
+      // Check balance
+      const balance = await usdcContract.balanceOf(account);
+      if (balance < amountWei) {
+        throw new Error(`Insufficient USDC balance. You have ${ethers.formatUnits(balance, 6)} USDC.`);
+      }
+
+      // Check allowance
+      const allowance = await usdcContract.allowance(account, CONTRACTS.Vault);
+      if (allowance < amountWei) {
+        console.log("Approving USDC...");
+        const approveTx = await usdcContract.approve(CONTRACTS.Vault, amountWei);
+        await approveTx.wait();
+      }
+
+      console.log("Repaying...");
+      // Manual gas limit
+      const repayTx = await vaultContract.repay(tokenId, amountWei, { gasLimit: 300000 });
       await repayTx.wait();
+      
       alert('✅ Repaid ' + amount + ' USDC successfully!');
       loadNFTs();
     } catch (error) {
       console.error('Repay failed:', error);
-      alert('❌ Repay failed: ' + error.message);
+      let errorMessage = error.message;
+      if (error.reason) errorMessage = error.reason;
+      if (error.info?.error?.message) errorMessage = error.info.error.message;
+      if (errorMessage.includes("missing revert data")) errorMessage = "Transaction failed. Possible reasons: Insufficient balance/allowance or debt already paid.";
+      alert('❌ Repay failed: ' + errorMessage);
     } finally {
       setLoading(false);
     }
@@ -161,13 +204,20 @@ function BorrowerDashboard({ signer, account }) {
     setLoading(true);
     try {
       const vaultContract = new ethers.Contract(CONTRACTS.Vault, Vault_ABI.abi || Vault_ABI, signer);
-      const tx = await vaultContract.withdrawCollateral(tokenId);
+      
+      // Manual gas limit
+      const tx = await vaultContract.withdrawCollateral(tokenId, { gasLimit: 300000 });
       await tx.wait();
+      
       alert('✅ Collateral withdrawn successfully!');
       loadNFTs();
     } catch (error) {
       console.error('Withdraw failed:', error);
-      alert('❌ Withdraw failed: ' + error.message);
+      let errorMessage = error.message;
+      if (error.reason) errorMessage = error.reason;
+      if (error.info?.error?.message) errorMessage = error.info.error.message;
+      if (errorMessage.includes("missing revert data")) errorMessage = "Transaction failed. Possible reasons: Debt not fully repaid.";
+      alert('❌ Withdraw failed: ' + errorMessage);
     } finally {
       setLoading(false);
     }

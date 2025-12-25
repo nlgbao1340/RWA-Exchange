@@ -137,14 +137,46 @@ function AdminMint({ signer, account }) {
       }
 
       const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
-      const tx = await nftContract.safeMint(cleanAddress, tokenId, tokenURI);
+      
+      // Pre-check: Verify if Token ID already exists to avoid gas estimation errors
+      try {
+        // ownerOf reverts if token does not exist
+        const existingOwner = await nftContract.ownerOf(tokenId);
+        if (existingOwner) {
+          throw new Error(`Token ID ${tokenId} already exists and is owned by ${existingOwner}`);
+        }
+      } catch (err) {
+        // If error is "invalid token ID" or similar, it means token doesn't exist (which is what we want)
+        // If it's our custom error, rethrow it
+        if (err.message.includes("already exists")) {
+          throw err;
+        }
+        // Otherwise proceed with minting
+      }
+
+      // Manual gas limit to prevent "missing revert data" on some RPCs if estimation fails
+      // safeMint usually takes 150k-200k gas
+      const tx = await nftContract.safeMint(cleanAddress, tokenId, tokenURI, {
+        gasLimit: 300000 
+      });
+      
       await tx.wait();
       alert(`✅ NFT #${tokenId} minted successfully!`);
       setNftRecipient(''); setTokenId(''); setTokenURI('');
       loadSystemNFTs(); // Refresh list
     } catch (error) {
       console.error('Mint failed:', error);
-      alert('❌ Mint failed: ' + error.message);
+      
+      let errorMessage = error.message;
+      // Try to extract readable error from RPC response
+      if (error.reason) errorMessage = error.reason;
+      if (error.info?.error?.message) errorMessage = error.info.error.message;
+      
+      if (errorMessage.includes("missing revert data")) {
+        errorMessage = "Transaction failed. Possible reasons: Token ID already exists, or you are not the owner.";
+      }
+      
+      alert('❌ Mint failed: ' + errorMessage);
     } finally {
       setLoading(false);
     }
@@ -156,7 +188,9 @@ function AdminMint({ signer, account }) {
     try {
       const oracleContract = new ethers.Contract(CONTRACTS.RWA_Oracle, RWA_Oracle_ABI.abi || RWA_Oracle_ABI, signer);
       const priceInWei = ethers.parseUnits(assetPrice, 6);
-      const tx = await oracleContract.setAssetPrice(priceTokenId, priceInWei);
+      
+      // Manual gas limit to prevent "missing revert data" errors
+      const tx = await oracleContract.setAssetPrice(priceTokenId, priceInWei, { gasLimit: 300000 });
       console.log("Transaction sent:", tx.hash);
       const receipt = await tx.wait();
       console.log("Transaction confirmed:", receipt);
@@ -170,10 +204,16 @@ function AdminMint({ signer, account }) {
       }, 1000);
     } catch (error) {
       console.error('Set price failed:', error);
-      if (error.data) {
-        console.error('Revert reason:', error.data);
+      
+      let errorMessage = error.message;
+      if (error.reason) errorMessage = error.reason;
+      if (error.info?.error?.message) errorMessage = error.info.error.message;
+      
+      if (errorMessage.includes("missing revert data")) {
+        errorMessage = "Transaction failed. Possible reasons: Not owner or invalid token ID.";
       }
-      alert('❌ Set price failed: ' + (error.reason || error.message));
+      
+      alert('❌ Set price failed: ' + errorMessage);
     } finally {
       setPriceLoading(false);
     }

@@ -20,17 +20,136 @@ function TransactionHistory({ account, provider }) {
     }
     
     setLoading(true);
-    console.log('Loading all transactions from blockchain...');
+    
+    // --- CACHE IMPLEMENTATION START ---
+    const CACHE_KEY = 'RWA_TX_HISTORY_V1';
+    let cachedData = { lastBlock: 0, transactions: [] };
+    try {
+      const saved = localStorage.getItem(CACHE_KEY);
+      if (saved) {
+        cachedData = JSON.parse(saved);
+        if (!Array.isArray(cachedData.transactions)) cachedData.transactions = [];
+      }
+    } catch (e) {
+      console.warn('Failed to load transaction cache', e);
+    }
+
+    // Initialize with cached transactions immediately
+    let allFetchedTxs = [...cachedData.transactions];
+    setTransactions(allFetchedTxs);
+    console.log(`Loaded ${allFetchedTxs.length} transactions from cache. Last block: ${cachedData.lastBlock}`);
+    // --- CACHE IMPLEMENTATION END ---
     
     try {
       // Get latest block
       const latestBlock = await provider.getBlockNumber();
       console.log('Latest block:', latestBlock);
-      const fromBlock = 0; // Start from genesis block
       
-      const txList = [];
+      // If cache is fresh, stop here
+      if (latestBlock <= cachedData.lastBlock) {
+        console.log('Cache is up to date.');
+        setLoading(false);
+        return;
+      }
       
-      // Get all events from all contracts (NO FILTERING by account)
+      // Alchemy Free Tier has a strict 10-block limit for eth_getLogs
+      const BLOCK_CHUNK_SIZE = 10; 
+      
+      // Query last ~500 blocks to prevent 429 errors and long load times
+      // 500 blocks is approx 1.5 hours of history. 
+      // Increase this value with caution on free tier.
+      const MAX_HISTORY_QUERY = 2000;
+      let fromBlock = cachedData.lastBlock > 0 ? cachedData.lastBlock + 1 : Math.max(0, latestBlock - 500);
+      
+      // If the gap is too huge, just fetch the recent ones
+      if (latestBlock - fromBlock > MAX_HISTORY_QUERY) {
+         fromBlock = latestBlock - MAX_HISTORY_QUERY;
+         console.log('Gap too large, limiting query to last', MAX_HISTORY_QUERY, 'blocks');
+      }
+      
+      console.log(`Querying blocks from ${fromBlock} to ${latestBlock} (Chunk size: ${BLOCK_CHUNK_SIZE})`)
+      
+      // Keep track of all transactions locally to merge and sort
+      // allFetchedTxs is already initialized with cache
+
+      // Helper to process events into transactions and update state incrementally
+      const processAndAddEvents = async (events, type, contractLabel, extraDataFn) => {
+        const newTxs = [];
+        for (const event of events) {
+          try {
+            // Add delay for getBlock to avoid rate limits
+            await new Promise(resolve => setTimeout(resolve, 50));
+            const block = await provider.getBlock(event.blockNumber);
+            
+            const txData = {
+              hash: event.transactionHash,
+              blockNumber: event.blockNumber,
+              timestamp: block.timestamp,
+              type: type,
+              contract: contractLabel,
+              ...extraDataFn(event)
+            };
+            newTxs.push(txData);
+          } catch (err) {
+            console.error('Error fetching block for event:', err);
+          }
+        }
+        
+        if (newTxs.length > 0) {
+          allFetchedTxs = [...allFetchedTxs, ...newTxs];
+          // Sort by timestamp (newest first)
+          allFetchedTxs.sort((a, b) => b.timestamp - a.timestamp);
+          setTransactions([...allFetchedTxs]);
+        }
+      };
+      
+      // Helper function to query with chunking and retry logic
+      // SEQUENTIAL execution to avoid 429 Too Many Requests
+      const queryEventsWithChunking = async (contract, eventFilter, fromBlockStart, toBlockEnd) => {
+        const events = [];
+        const MAX_RETRIES = 5;
+        
+        // Create chunks
+        const chunks = [];
+        for (let i = fromBlockStart; i <= toBlockEnd; i += BLOCK_CHUNK_SIZE) {
+          chunks.push({
+            start: i,
+            end: Math.min(i + BLOCK_CHUNK_SIZE - 1, toBlockEnd)
+          });
+        }
+
+        // Process chunks sequentially
+        for (const chunk of chunks) {
+          let retries = 0;
+          let success = false;
+          
+          while (retries < MAX_RETRIES && !success) {
+            try {
+              // Add delay to respect rate limits (Alchemy Free Tier)
+              await new Promise(resolve => setTimeout(resolve, 200));
+              
+              const chunkEvents = await contract.queryFilter(eventFilter, chunk.start, chunk.end);
+              events.push(...chunkEvents);
+              success = true;
+            } catch (error) {
+              retries++;
+              const isRateLimit = error.message && (error.message.includes('429') || error.message.includes('compute units'));
+              
+              if (retries >= MAX_RETRIES) {
+                console.error(`Failed to query blocks ${chunk.start}-${chunk.end}:`, error.message);
+                break; 
+              }
+              
+              // Exponential backoff, longer if rate limited
+              const delayMs = (isRateLimit ? 2000 : 500) * Math.pow(2, retries - 1);
+              console.log(`Retry ${retries}/${MAX_RETRIES} for blocks ${chunk.start}-${chunk.end} after ${delayMs}ms...`);
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+          }
+        }
+        
+        return events;
+      };
       
       // 1. USDC Transfers
       try {
@@ -39,24 +158,20 @@ function TransactionHistory({ account, provider }) {
           ['event Transfer(address indexed from, address indexed to, uint256 value)'],
           provider
         );
-        const usdcEvents = await usdcContract.queryFilter(usdcContract.filters.Transfer(), fromBlock, latestBlock);
+        const usdcEvents = await queryEventsWithChunking(
+          usdcContract, 
+          usdcContract.filters.Transfer(), 
+          fromBlock, 
+          latestBlock
+        );
         console.log('USDC Transfers:', usdcEvents.length);
-        
-        for (const event of usdcEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'Transfer',
-            contract: 'USDC',
+        await processAndAddEvents(usdcEvents, 'Transfer', 'USDC', (event) => ({
             from: event.args.from,
             to: event.args.to,
             amount: event.args.value
-          });
-        }
+        }));
       } catch (e) {
-        console.error('Error loading USDC events:', e);
+        console.error('Error loading USDC events:', e.message);
       }
 
       // 2. NFT Transfers
@@ -66,24 +181,20 @@ function TransactionHistory({ account, provider }) {
           ['event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)'],
           provider
         );
-        const nftEvents = await nftContract.queryFilter(nftContract.filters.Transfer(), fromBlock, latestBlock);
+        const nftEvents = await queryEventsWithChunking(
+          nftContract,
+          nftContract.filters.Transfer(),
+          fromBlock,
+          latestBlock
+        );
         console.log('NFT Transfers:', nftEvents.length);
-        
-        for (const event of nftEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'NFTTransfer',
-            contract: 'NFT',
+        await processAndAddEvents(nftEvents, 'NFTTransfer', 'NFT', (event) => ({
             from: event.args.from,
             to: event.args.to,
             tokenId: event.args.tokenId
-          });
-        }
+        }));
       } catch (e) {
-        console.error('Error loading NFT events:', e);
+        console.error('Error loading NFT events:', e.message);
       }
 
       // 3. LendingPool Events
@@ -97,37 +208,31 @@ function TransactionHistory({ account, provider }) {
           provider
         );
         
-        const depositEvents = await poolContract.queryFilter(poolContract.filters.Deposit(), fromBlock, latestBlock);
+        const depositEvents = await queryEventsWithChunking(
+          poolContract,
+          poolContract.filters.Deposit(),
+          fromBlock,
+          latestBlock
+        );
         console.log('Deposits:', depositEvents.length);
-        for (const event of depositEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'Deposit',
-            contract: 'LendingPool',
+        await processAndAddEvents(depositEvents, 'Deposit', 'LendingPool', (event) => ({
             user: event.args.user,
             amount: event.args.amount
-          });
-        }
+        }));
         
-        const withdrawEvents = await poolContract.queryFilter(poolContract.filters.Withdraw(), fromBlock, latestBlock);
+        const withdrawEvents = await queryEventsWithChunking(
+          poolContract,
+          poolContract.filters.Withdraw(),
+          fromBlock,
+          latestBlock
+        );
         console.log('Withdraws:', withdrawEvents.length);
-        for (const event of withdrawEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'Withdraw',
-            contract: 'LendingPool',
+        await processAndAddEvents(withdrawEvents, 'Withdraw', 'LendingPool', (event) => ({
             user: event.args.user,
             amount: event.args.amount
-          });
-        }
+        }));
       } catch (e) {
-        console.error('Error loading LendingPool events:', e);
+        console.error('Error loading LendingPool events:', e.message);
       }
 
       // 4. Vault Events
@@ -143,69 +248,57 @@ function TransactionHistory({ account, provider }) {
           provider
         );
         
-        const collateralEvents = await vaultContract.queryFilter(vaultContract.filters.CollateralDeposited(), fromBlock, latestBlock);
+        const collateralEvents = await queryEventsWithChunking(
+          vaultContract,
+          vaultContract.filters.CollateralDeposited(),
+          fromBlock,
+          latestBlock
+        );
         console.log('Collateral Deposits:', collateralEvents.length);
-        for (const event of collateralEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'CollateralDeposited',
-            contract: 'Vault',
+        await processAndAddEvents(collateralEvents, 'CollateralDeposited', 'Vault', (event) => ({
             user: event.args.user,
             tokenId: event.args.tokenId
-          });
-        }
+        }));
         
-        const borrowEvents = await vaultContract.queryFilter(vaultContract.filters.Borrowed(), fromBlock, latestBlock);
+        const borrowEvents = await queryEventsWithChunking(
+          vaultContract,
+          vaultContract.filters.Borrowed(),
+          fromBlock,
+          latestBlock
+        );
         console.log('Borrows:', borrowEvents.length);
-        for (const event of borrowEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'Borrowed',
-            contract: 'Vault',
+        await processAndAddEvents(borrowEvents, 'Borrowed', 'Vault', (event) => ({
             user: event.args.user,
             tokenId: event.args.tokenId,
             amount: event.args.amount
-          });
-        }
+        }));
         
-        const repayEvents = await vaultContract.queryFilter(vaultContract.filters.Repaid(), fromBlock, latestBlock);
+        const repayEvents = await queryEventsWithChunking(
+          vaultContract,
+          vaultContract.filters.Repaid(),
+          fromBlock,
+          latestBlock
+        );
         console.log('Repayments:', repayEvents.length);
-        for (const event of repayEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'Repaid',
-            contract: 'Vault',
+        await processAndAddEvents(repayEvents, 'Repaid', 'Vault', (event) => ({
             user: event.args.user,
             tokenId: event.args.tokenId,
             amount: event.args.amount
-          });
-        }
+        }));
         
-        const withdrawCollateralEvents = await vaultContract.queryFilter(vaultContract.filters.CollateralWithdrawn(), fromBlock, latestBlock);
+        const withdrawCollateralEvents = await queryEventsWithChunking(
+          vaultContract,
+          vaultContract.filters.CollateralWithdrawn(),
+          fromBlock,
+          latestBlock
+        );
         console.log('Collateral Withdrawals:', withdrawCollateralEvents.length);
-        for (const event of withdrawCollateralEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'CollateralWithdrawn',
-            contract: 'Vault',
+        await processAndAddEvents(withdrawCollateralEvents, 'CollateralWithdrawn', 'Vault', (event) => ({
             user: event.args.user,
             tokenId: event.args.tokenId
-          });
-        }
+        }));
       } catch (e) {
-        console.error('Error loading Vault events:', e);
+        console.error('Error loading Vault events:', e.message);
       }
 
       // 5. Liquidation Events
@@ -220,63 +313,68 @@ function TransactionHistory({ account, provider }) {
           provider
         );
         
-        const auctionStartEvents = await liquidationContract.queryFilter(liquidationContract.filters.AuctionStarted(), fromBlock, latestBlock);
+        const auctionStartEvents = await queryEventsWithChunking(
+          liquidationContract,
+          liquidationContract.filters.AuctionStarted(),
+          fromBlock,
+          latestBlock
+        );
         console.log('Auctions Started:', auctionStartEvents.length);
-        for (const event of auctionStartEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'AuctionStarted',
-            contract: 'Liquidation',
+        await processAndAddEvents(auctionStartEvents, 'AuctionStarted', 'Liquidation', (event) => ({
             tokenId: event.args.tokenId,
             debtAmount: event.args.debtAmount
-          });
-        }
+        }));
         
-        const bidEvents = await liquidationContract.queryFilter(liquidationContract.filters.BidPlaced(), fromBlock, latestBlock);
+        const bidEvents = await queryEventsWithChunking(
+          liquidationContract,
+          liquidationContract.filters.BidPlaced(),
+          fromBlock,
+          latestBlock
+        );
         console.log('Bids Placed:', bidEvents.length);
-        for (const event of bidEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'BidPlaced',
-            contract: 'Liquidation',
+        await processAndAddEvents(bidEvents, 'BidPlaced', 'Liquidation', (event) => ({
             tokenId: event.args.tokenId,
             bidder: event.args.bidder,
             amount: event.args.amount
-          });
-        }
+        }));
         
-        const auctionEndEvents = await liquidationContract.queryFilter(liquidationContract.filters.AuctionEnded(), fromBlock, latestBlock);
+        const auctionEndEvents = await queryEventsWithChunking(
+          liquidationContract,
+          liquidationContract.filters.AuctionEnded(),
+          fromBlock,
+          latestBlock
+        );
         console.log('Auctions Ended:', auctionEndEvents.length);
-        for (const event of auctionEndEvents) {
-          const block = await provider.getBlock(event.blockNumber);
-          txList.push({
-            hash: event.transactionHash,
-            blockNumber: event.blockNumber,
-            timestamp: block.timestamp,
-            type: 'AuctionEnded',
-            contract: 'Liquidation',
+        await processAndAddEvents(auctionEndEvents, 'AuctionEnded', 'Liquidation', (event) => ({
             tokenId: event.args.tokenId,
             winner: event.args.winner,
             amount: event.args.finalBid
-          });
-        }
+        }));
       } catch (e) {
-        console.error('Error loading Liquidation events:', e);
+        console.error('Error loading Liquidation events:', e.message);
       }
 
-      console.log('[TransactionHistory] Total transactions loaded:', txList.length);
-
-      // Sort by timestamp (newest first)
-      txList.sort((a, b) => b.timestamp - a.timestamp);
+      console.log('[TransactionHistory] Total transactions loaded:', allFetchedTxs.length);
       
-      setTransactions(txList);
-      console.log('[TransactionHistory] Transactions state updated, length:', txList.length);
+      // --- SAVE CACHE START ---
+      // Sort by timestamp (newest first)
+      allFetchedTxs.sort((a, b) => b.timestamp - a.timestamp);
+      
+      // Limit cache size to prevent localStorage overflow (e.g. 1000 items)
+      const CACHE_LIMIT = 1000;
+      const txsToCache = allFetchedTxs.slice(0, CACHE_LIMIT);
+      
+      try {
+        localStorage.setItem('RWA_TX_HISTORY_V1', JSON.stringify({
+          lastBlock: latestBlock,
+          transactions: txsToCache
+        }));
+        console.log(`Saved ${txsToCache.length} transactions to cache. Last block: ${latestBlock}`);
+      } catch (e) {
+        console.warn('Failed to save transaction cache', e);
+      }
+      // --- SAVE CACHE END ---
+
     } catch (error) {
       console.error('[TransactionHistory] Load transactions failed:', error);
     } finally {
@@ -487,24 +585,33 @@ function TransactionHistory({ account, provider }) {
 
       {/* Transactions List */}
       <div className="premium-card">
-        {loading ? (
+        {loading && transactions.length === 0 ? (
           <div className="text-center py-12">
             <div className="text-6xl mb-4 animate-spin">⚙️</div>
             <p className="text-gray-400">Loading transactions...</p>
           </div>
-        ) : paginatedTxs.length === 0 ? (
-          <div className="text-center py-12">
-            <div className="text-6xl mb-4">📭</div>
-            <h3 className="text-xl font-bold mb-2">No Transactions Found</h3>
-            <p className="text-gray-400">
-              {viewMode === 'personal' 
-                ? 'You have no transactions yet. Start by supplying or borrowing!' 
-                : 'No transactions on the blockchain yet.'}
-            </p>
-          </div>
         ) : (
           <>
-            {/* Table Header */}
+            {loading && (
+              <div className="flex items-center justify-center space-x-2 py-2 mb-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                <div className="animate-spin">⚙️</div>
+                <span className="text-sm text-blue-300">Syncing with blockchain... ({transactions.length} found)</span>
+              </div>
+            )}
+
+            {paginatedTxs.length === 0 ? (
+              <div className="text-center py-12">
+                <div className="text-6xl mb-4">📭</div>
+                <h3 className="text-xl font-bold mb-2">No Transactions Found</h3>
+                <p className="text-gray-400">
+                  {viewMode === 'personal' 
+                    ? 'You have no transactions yet. Start by supplying or borrowing!' 
+                    : 'No transactions on the blockchain yet.'}
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Table Header */}
             <div className="hidden lg:grid grid-cols-6 gap-4 pb-4 mb-4 border-b border-white/10 text-sm text-gray-400 font-semibold">
               <div>TYPE</div>
               <div>HASH</div>
@@ -623,6 +730,8 @@ function TransactionHistory({ account, provider }) {
                   </button>
                 </div>
               </div>
+            )}
+              </>
             )}
           </>
         )}

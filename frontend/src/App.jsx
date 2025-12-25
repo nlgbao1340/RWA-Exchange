@@ -295,8 +295,24 @@ function App() {
     };
     autoConnect();
     if (window.ethereum) {
-      window.ethereum.on('accountsChanged', (accounts) => {
-        if (accounts.length > 0) { setAccount(accounts[0]); } else { setAccount(null); setProvider(null); setSigner(null); }
+      window.ethereum.on('accountsChanged', async (accounts) => {
+        if (accounts.length > 0) { 
+          setAccount(accounts[0]);
+          // CRITICAL: Re-fetch signer when account changes to prevent "contract runner does not support calling"
+          try {
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            const newSigner = await provider.getSigner();
+            setProvider(provider);
+            setSigner(newSigner);
+            console.log("Account changed, signer updated for:", accounts[0]);
+          } catch (e) {
+            console.error("Failed to update signer on account change:", e);
+          }
+        } else { 
+          setAccount(null); 
+          setProvider(null); 
+          setSigner(null); 
+        }
       });
       window.ethereum.on('chainChanged', () => {
         window.location.reload();

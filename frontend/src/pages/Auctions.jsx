@@ -1,49 +1,122 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ethers } from 'ethers';
 import { CONTRACTS } from '../config/contracts';
 import LiquidationManager_ABI from '../abis/LiquidationManager.json';
 import RWA_NFT_ABI from '../abis/RWA_NFT.json';
 import RWA_Oracle_ABI from '../abis/RWA_Oracle.json';
 import MockUSDC_ABI from '../abis/MockUSDC.json';
+import Vault_ABI from '../abis/Vault.json';
 
 function Auctions({ signer, account }) {
   const [auctions, setAuctions] = useState([]);
+  const [liquidatable, setLiquidatable] = useState([]);
   const [loading, setLoading] = useState(false);
+  
+  // Cache for prices to reduce RPC calls (30s TTL)
+  const priceCache = useRef({});
+  // Track optimistic updates to prevent overwriting with stale RPC data
+  const pendingUpdates = useRef({});
 
   const loadAuctions = async () => {
     try {
       const liquidationContract = new ethers.Contract(CONTRACTS.LiquidationManager, LiquidationManager_ABI.abi || LiquidationManager_ABI, signer);
       const nftContract = new ethers.Contract(CONTRACTS.RWA_NFT, RWA_NFT_ABI.abi || RWA_NFT_ABI, signer);
       const oracleContract = new ethers.Contract(CONTRACTS.RWA_Oracle, RWA_Oracle_ABI.abi || RWA_Oracle_ABI, signer);
+      const vaultContract = new ethers.Contract(CONTRACTS.Vault, Vault_ABI.abi || Vault_ABI, signer);
 
-      const balance = await nftContract.balanceOf(CONTRACTS.LiquidationManager);
+      // Iterate over Vault tokens ONCE to find both Active Auctions and Liquidatable Positions
+      const balance = await nftContract.balanceOf(CONTRACTS.Vault);
       const auctionList = [];
+      const riskyList = [];
 
       for (let i = 0; i < balance; i++) {
-        const tokenId = await nftContract.tokenOfOwnerByIndex(CONTRACTS.LiquidationManager, i);
-        const auction = await liquidationContract.auctions(tokenId);
-        
-        if (auction.isActive) {
-          const priceWei = await oracleContract.getAssetPrice(tokenId);
-          const price = ethers.formatUnits(priceWei, 6);
-          const debt = ethers.formatUnits(auction.debtAmount, 6);
-          const currentBid = ethers.formatUnits(auction.highestBid, 6);
-          const timeLeft = Number(auction.endTime) - Math.floor(Date.now() / 1000);
+        try {
+          const tokenId = await nftContract.tokenOfOwnerByIndex(CONTRACTS.Vault, i);
+          const tokenIdStr = tokenId.toString();
           
-          auctionList.push({
-            tokenId: tokenId.toString(),
-            price,
-            debt,
-            currentBid,
-            highestBidder: auction.highestBidder,
-            endTime: Number(auction.endTime),
-            timeLeft,
-            isActive: auction.isActive
-          });
+          // 1. Check Auction Status
+          const auction = await liquidationContract.auctions(tokenId);
+          
+          // Fetch Price with Caching
+          let price = '0';
+          const now = Date.now();
+          if (priceCache.current[tokenIdStr] && (now - priceCache.current[tokenIdStr].timestamp < 30000)) {
+            price = priceCache.current[tokenIdStr].value;
+          } else {
+            try {
+              const priceWei = await oracleContract.getAssetPrice(tokenId);
+              price = ethers.formatUnits(priceWei, 6);
+              priceCache.current[tokenIdStr] = { value: price, timestamp: now };
+            } catch (e) {
+              console.warn(`Price fetch failed for ${tokenIdStr}`, e);
+            }
+          }
+
+          if (auction.active) {
+            // --- ACTIVE AUCTION ---
+            const debt = ethers.formatUnits(auction.originalDebt || auction.debtAmount || 0, 6);
+            const currentBid = ethers.formatUnits(auction.highestBid, 6);
+            const timeLeft = Number(auction.endTime) - Math.floor(Date.now() / 1000);
+            
+            auctionList.push({
+              tokenId: tokenIdStr,
+              price,
+              debt,
+              currentBid,
+              highestBidder: auction.highestBidder,
+              endTime: Number(auction.endTime),
+              timeLeft,
+              isActive: true
+            });
+          } else {
+            // --- POTENTIAL LIQUIDATION ---
+            // Only check for liquidation if NOT already in auction
+            const position = await vaultContract.positions(tokenId);
+            
+            if (position.debt > 0) {
+              const debt = ethers.formatUnits(position.debt, 6);
+              const maxBorrow = parseFloat(price) * 0.6; // 60% LTV
+              const healthFactor = parseFloat(debt) > 0 ? (maxBorrow / parseFloat(debt)) * 100 : 100;
+              
+              if (healthFactor < 100) {
+                riskyList.push({
+                  tokenId: tokenIdStr,
+                  price,
+                  debt,
+                  healthFactor,
+                  owner: position.owner
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`Error processing token at index ${i}:`, err);
         }
       }
 
-      setAuctions(auctionList);
+      // Update state, but preserve optimistic updates if they are recent (< 20s)
+      setAuctions(prevAuctions => {
+        return auctionList.map(newItem => {
+          const tokenId = newItem.tokenId;
+          if (pendingUpdates.current[tokenId] && Date.now() - pendingUpdates.current[tokenId] < 20000) {
+            const optimisticItem = prevAuctions.find(p => p.tokenId === tokenId);
+            if (optimisticItem) return optimisticItem;
+          }
+          return newItem;
+        });
+      });
+
+      setLiquidatable(prevRisky => {
+        // Filter out items that we know are auctioned (optimistically)
+        return riskyList.filter(item => {
+           if (pendingUpdates.current[item.tokenId] && Date.now() - pendingUpdates.current[item.tokenId] < 20000) {
+             // If we recently started an auction for this, don't show it in risky list
+             return false; 
+           }
+           return true;
+        });
+      });
+
     } catch (error) {
       console.error('Load auctions failed:', error);
     }
@@ -57,6 +130,33 @@ function Auctions({ signer, account }) {
     }
   }, [signer, account]);
 
+  const handleStartAuction = async (tokenId) => {
+    setLoading(true);
+    try {
+      const liquidationContract = new ethers.Contract(CONTRACTS.LiquidationManager, LiquidationManager_ABI.abi || LiquidationManager_ABI, signer);
+      // Manual gas limit to prevent "missing revert data" errors
+      const tx = await liquidationContract.startAuction(tokenId, { gasLimit: 300000 });
+      await tx.wait();
+      
+      // Optimistic Update: Remove from liquidatable immediately
+      pendingUpdates.current[tokenId] = Date.now();
+      setLiquidatable(prev => prev.filter(item => item.tokenId !== tokenId));
+      
+      alert('✅ Liquidation started successfully!');
+      // Delay reload to allow RPC to index the event
+      setTimeout(loadAuctions, 2000);
+    } catch (error) {
+      console.error('Start auction failed:', error);
+      let errorMessage = error.message;
+      if (error.reason) errorMessage = error.reason;
+      if (error.info?.error?.message) errorMessage = error.info.error.message;
+      if (errorMessage.includes("missing revert data")) errorMessage = "Transaction failed. Possible reasons: Health factor is above 100% or auction already started.";
+      alert('❌ Start auction failed: ' + errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleBid = async (tokenId, bidAmount) => {
     setLoading(true);
     try {
@@ -64,17 +164,35 @@ function Auctions({ signer, account }) {
       const liquidationContract = new ethers.Contract(CONTRACTS.LiquidationManager, LiquidationManager_ABI.abi || LiquidationManager_ABI, signer);
       
       const bidWei = ethers.parseUnits(bidAmount, 6);
-      const approveTx = await usdcContract.approve(CONTRACTS.LiquidationManager, bidWei);
-      await approveTx.wait();
       
-      const bidTx = await liquidationContract.bid(tokenId, bidWei);
+      // Check allowance first
+      const allowance = await usdcContract.allowance(account, CONTRACTS.LiquidationManager);
+      if (allowance < bidWei) {
+        const approveTx = await usdcContract.approve(CONTRACTS.LiquidationManager, bidWei, { gasLimit: 100000 });
+        await approveTx.wait();
+      }
+      
+      // Manual gas limit to fix "missing revert data"
+      const bidTx = await liquidationContract.bid(tokenId, bidWei, { gasLimit: 300000 });
       await bidTx.wait();
       
+      // Optimistic Update: Update bid amount
+      pendingUpdates.current[tokenId] = Date.now();
+      setAuctions(prev => prev.map(auction => {
+        if (auction.tokenId === tokenId) {
+          return { ...auction, currentBid: bidAmount, highestBidder: account };
+        }
+        return auction;
+      }));
+      
       alert('✅ Bid placed successfully!');
-      loadAuctions();
+      // Skip immediate reload to prevent stale data from overwriting optimistic update
+      // The background poller will eventually sync the state
     } catch (error) {
       console.error('Bid failed:', error);
-      alert('❌ Bid failed: ' + error.message);
+      let errorMessage = error.message;
+      if (errorMessage.includes("missing revert data")) errorMessage = "Transaction failed. Possible reasons: Bid too low or auction ended.";
+      alert('❌ Bid failed: ' + errorMessage);
     } finally {
       setLoading(false);
     }
@@ -86,8 +204,14 @@ function Auctions({ signer, account }) {
       const liquidationContract = new ethers.Contract(CONTRACTS.LiquidationManager, LiquidationManager_ABI.abi || LiquidationManager_ABI, signer);
       const tx = await liquidationContract.endAuction(tokenId);
       await tx.wait();
+      
+      // Optimistic Update: Remove from auctions
+      pendingUpdates.current[tokenId] = Date.now();
+      setAuctions(prev => prev.filter(auction => auction.tokenId !== tokenId));
+      
       alert('✅ Auction ended successfully!');
-      loadAuctions();
+      // Delay reload to allow RPC to index the event
+      setTimeout(loadAuctions, 2000);
     } catch (error) {
       console.error('End auction failed:', error);
       alert('❌ End auction failed: ' + error.message);
@@ -132,6 +256,56 @@ function Auctions({ signer, account }) {
         </h1>
         <p className="text-xl text-gray-400">Bid on liquidated collateral - 3-day English auction</p>
       </div>
+
+      {/* Liquidatable Positions Section */}
+      {liquidatable.length > 0 && (
+        <div className="mb-12">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-3xl font-bold flex items-center space-x-3">
+              <span>⚠️</span><span>Liquidatable Positions</span>
+            </h2>
+            <span className="badge badge-danger animate-pulse">{liquidatable.length} At Risk</span>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {liquidatable.map((pos) => (
+              <div key={pos.tokenId} className="premium-card border-red-500/30 bg-red-500/5">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="badge badge-danger">NFT #{pos.tokenId}</span>
+                  <span className="text-2xl">📉</span>
+                </div>
+                
+                <div className="space-y-3 mb-6">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Health Factor</span>
+                    <span className="text-red-400 font-bold">{pos.healthFactor.toFixed(2)}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Debt</span>
+                    <span className="text-white font-bold">${parseFloat(pos.debt).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Collateral Value</span>
+                    <span className="text-white font-bold">${parseFloat(pos.price).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Owner</span>
+                    <span className="text-gray-400 text-xs font-mono">{pos.owner.slice(0,6)}...{pos.owner.slice(-4)}</span>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => handleStartAuction(pos.tokenId)}
+                  disabled={loading}
+                  className="btn-danger w-full"
+                >
+                  {loading ? '⚙️ Processing...' : '⚡ Trigger Liquidation'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {auctions.length === 0 ? (
         <div className="premium-card text-center p-12">

@@ -56,16 +56,41 @@ function LenderPool({ signer, account }) {
       const usdcContract = new ethers.Contract(CONTRACTS.MockUSDC, MockUSDC_ABI.abi || MockUSDC_ABI, signer);
       const poolContract = new ethers.Contract(CONTRACTS.LendingPool, LendingPool_ABI.abi || LendingPool_ABI, signer);
       const amount = ethers.parseUnits(depositAmount, 6);
-      const approveTx = await usdcContract.approve(CONTRACTS.LendingPool, amount);
-      await approveTx.wait();
-      const depositTx = await poolContract.deposit(amount);
+      
+      // Check balance
+      const balance = await usdcContract.balanceOf(account);
+      if (balance < amount) {
+        throw new Error(`Insufficient USDC balance. You have ${ethers.formatUnits(balance, 6)} USDC.`);
+      }
+
+      // Check allowance to avoid unnecessary approve tx
+      const allowance = await usdcContract.allowance(account, CONTRACTS.LendingPool);
+      if (allowance < amount) {
+        console.log("Approving USDC...");
+        const approveTx = await usdcContract.approve(CONTRACTS.LendingPool, amount);
+        await approveTx.wait();
+      }
+
+      console.log("Depositing...");
+      // Manual gas limit to prevent "missing revert data" errors
+      const depositTx = await poolContract.deposit(amount, { gasLimit: 300000 });
       await depositTx.wait();
+      
       alert('✅ Deposited ' + depositAmount + ' USDC!');
       setDepositAmount('');
       loadData();
     } catch (error) {
       console.error('Deposit failed:', error);
-      alert('❌ Deposit failed: ' + error.message);
+      
+      let errorMessage = error.message;
+      if (error.reason) errorMessage = error.reason;
+      if (error.info?.error?.message) errorMessage = error.info.error.message;
+      
+      if (errorMessage.includes("missing revert data")) {
+        errorMessage = "Transaction failed. Possible reasons: Insufficient balance, allowance issue, or contract paused.";
+      }
+      
+      alert('❌ Deposit failed: ' + errorMessage);
     } finally {
       setLoading(false);
     }
@@ -77,14 +102,25 @@ function LenderPool({ signer, account }) {
     try {
       const poolContract = new ethers.Contract(CONTRACTS.LendingPool, LendingPool_ABI.abi || LendingPool_ABI, signer);
       const amount = ethers.parseUnits(withdrawAmount, 6);
-      const tx = await poolContract.withdraw(amount);
+      
+      // Manual gas limit
+      const tx = await poolContract.withdraw(amount, { gasLimit: 300000 });
       await tx.wait();
       alert('✅ Withdrawn ' + withdrawAmount + ' USDC!');
       setWithdrawAmount('');
       loadData();
     } catch (error) {
       console.error('Withdraw failed:', error);
-      alert('❌ Withdraw failed: ' + error.message);
+      
+      let errorMessage = error.message;
+      if (error.reason) errorMessage = error.reason;
+      if (error.info?.error?.message) errorMessage = error.info.error.message;
+      
+      if (errorMessage.includes("missing revert data")) {
+        errorMessage = "Transaction failed. Possible reasons: Insufficient deposit balance or pool liquidity.";
+      }
+      
+      alert('❌ Withdraw failed: ' + errorMessage);
     } finally {
       setLoading(false);
     }
