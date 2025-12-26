@@ -793,7 +793,7 @@ function TransactionHistory({ account, provider }) {
               </div>
 
               <a
-                href={`https://etherscan.io/tx/${selectedTx.hash}`}
+                href={`https://sepolia.etherscan.io/tx/${selectedTx.hash}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn-primary w-full flex items-center justify-center space-x-2"
